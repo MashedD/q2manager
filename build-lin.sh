@@ -2,6 +2,6 @@
 cd "$(dirname -- "$(readlink -f -- "$0")")"
 
 cmake -S . -B build
-cmake --build build
+cmake --build build --config Release 
 sstrip build/q2manager
 
