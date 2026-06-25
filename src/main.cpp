@@ -53,6 +53,10 @@ extern char **environ;
 namespace fs = std::filesystem;
 using json = nlohmann::json;
 
+#ifndef Q2MANAGER_VERSION
+#define Q2MANAGER_VERSION "dev"
+#endif
+
 constexpr int kMusicSampleRate = 44100;
 constexpr float kPi = 3.14159265358979323846f;
 
@@ -154,6 +158,8 @@ struct App {
     bool quitRequested = false;
     Font font{};
     bool customFont = false;
+    Font monoFont{};
+    bool customMonoFont = false;
     AudioStream music{};
     bool audioReady = false;
     bool musicPlaying = false;
@@ -304,6 +310,13 @@ static int PackageIndex(const Preset &preset, const fs::path &path) {
     return -1;
 }
 
+static std::string DisplayPakName(const fs::path &path) {
+    std::string name = path.filename().string();
+    if (name.rfind("q2dl-", 0) == 0) name.erase(0, 5);
+    if (name.size() >= 4 && name.substr(name.size() - 4) == ".pkz") name.erase(name.size() - 4);
+    return name;
+}
+
 static void ScanPakStore(App &app) {
     app.availablePackages.clear();
     const fs::path pakStore = PakStoreDir(app.settings.quakeDir);
@@ -365,6 +378,31 @@ static void LoadReadableFont(App &app) {
     app.font = GetFontDefault();
 }
 
+static void LoadMonospaceFont(App &app) {
+    const std::array<fs::path, 9> candidates = {
+        "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+        "/usr/share/fonts/liberation/LiberationMono-Regular.ttf",
+        "/usr/share/fonts/liberation2/LiberationMono-Regular.ttf",
+        "/usr/share/fonts/noto/NotoSansMono-Regular.ttf",
+        "C:/Windows/Fonts/consola.ttf",
+        "C:/Windows/Fonts/cour.ttf",
+        "C:/Windows/Fonts/lucon.ttf",
+        "C:/Windows/Fonts/cascadiamono.ttf",
+    };
+
+    for (const auto &path : candidates) {
+        if (!fs::is_regular_file(path)) continue;
+        Font font = LoadFontEx(path.string().c_str(), 24, nullptr, 0);
+        if (font.texture.id == 0) continue;
+        app.monoFont = font;
+        app.customMonoFont = true;
+        SetTextureFilter(app.monoFont.texture, TEXTURE_FILTER_BILINEAR);
+        return;
+    }
+    app.monoFont = app.customFont ? app.font : GetFontDefault();
+}
+
 static void InitMusic(App &app) {
     InitAudioDevice();
     if (!IsAudioDeviceReady()) {
@@ -394,6 +432,10 @@ static void ToggleMusic(App &app) {
 
 static void DrawAppText(const App &app, const std::string &text, int x, int y, float size, Color color) {
     DrawTextEx(app.customFont ? app.font : GetFontDefault(), text.c_str(), {static_cast<float>(x), static_cast<float>(y)}, size, 1.0f, color);
+}
+
+static void DrawMonoText(const App &app, const std::string &text, int x, int y, float size, Color color) {
+    DrawTextEx(app.customMonoFont ? app.monoFont : (app.customFont ? app.font : GetFontDefault()), text.c_str(), {static_cast<float>(x), static_cast<float>(y)}, size, 1.0f, color);
 }
 
 static void LoadSettings(App &app) {
@@ -705,6 +747,7 @@ static void DrawBackground(const App &app) {
     }
     DrawAppText(app, "Q2 MOD MANAGER", 28, 20, 30, theme.accent);
     DrawAppText(app, "q2pro preset symlink launcher", 31, 58, 15, theme.accent2);
+    DrawAppText(app, std::string("version ") + Q2MANAGER_VERSION, 31, 74, 12, theme.muted);
 }
 
 static void ApplyStyle(const App &app) {
@@ -818,9 +861,9 @@ static void DrawPackageToggleList(App &app, Preset &preset) {
         } else {
             label << "-- [ ] ";
         }
-        label << (missing ? "missing: " : "") << fs::path(path).filename().string();
-        DrawAppText(app, label.str(), static_cast<int>(r.x + 6), static_cast<int>(r.y + 3), 14,
-                    missing ? Color{255, 115, 115, 255} : theme.text);
+        label << (missing ? "missing: " : "") << DisplayPakName(path);
+        DrawMonoText(app, label.str(), static_cast<int>(r.x + 6), static_cast<int>(r.y + 3), 14,
+                     missing ? Color{255, 115, 115, 255} : theme.text);
 
         if (hover && IsMouseButtonPressed(MOUSE_RIGHT_BUTTON) && activeIndex >= 0) {
             app.selectedPackage = activeIndex;
@@ -943,10 +986,12 @@ int main() {
     LoadSettings(app);
     app.settings.quakeDir = ExecutableDir().string();
     SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_VSYNC_HINT);
-    InitWindow(800, 560, "q2manager");
+    const std::string windowTitle = std::string("q2manager ") + Q2MANAGER_VERSION;
+    InitWindow(800, 560, windowTitle.c_str());
     SetTargetFPS(60);
     InitMusic(app);
     LoadReadableFont(app);
+    LoadMonospaceFont(app);
     ApplyStyle(app);
     while (!WindowShouldClose() && !app.quitRequested) {
         BeginDrawing();
@@ -965,6 +1010,7 @@ int main() {
         UnloadAudioStream(app.music);
         CloseAudioDevice();
     }
+    if (app.customMonoFont) UnloadFont(app.monoFont);
     if (app.customFont) UnloadFont(app.font);
     CloseWindow();
 }

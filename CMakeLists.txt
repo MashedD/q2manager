@@ -2,6 +2,19 @@ cmake_minimum_required(VERSION 3.20)
 
 project(q2manager VERSION 0.1.0 LANGUAGES CXX)
 
+string(TIMESTAMP Q2MANAGER_BUILD_DATE "%Y-%m-%d")
+execute_process(
+  COMMAND git rev-parse --short HEAD
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  OUTPUT_VARIABLE Q2MANAGER_GIT_HASH
+  OUTPUT_STRIP_TRAILING_WHITESPACE
+  ERROR_QUIET
+)
+if (NOT Q2MANAGER_GIT_HASH)
+  set(Q2MANAGER_GIT_HASH unknown)
+endif()
+set(Q2MANAGER_VERSION_STRING "${Q2MANAGER_BUILD_DATE}-${Q2MANAGER_GIT_HASH}")
+
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -55,6 +68,8 @@ target_include_directories(q2manager PRIVATE
 )
 
 target_link_libraries(q2manager PRIVATE raylib nlohmann_json::nlohmann_json)
+
+target_compile_definitions(q2manager PRIVATE Q2MANAGER_VERSION="${Q2MANAGER_VERSION_STRING}")
 
 if (WIN32)
   target_compile_definitions(q2manager PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
