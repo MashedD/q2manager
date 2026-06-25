@@ -1,0 +1,5 @@
+build/
+q2manager.json
+*.user
+*.suo
+*.vcxproj.user
