@@ -1,6 +1,8 @@
 # q2manager
 
-Small Quake II/q2pro mod preset launcher. UI is raylib + raygui, with no Qt/GTK/wxWidgets/Electron.
+Small Quake II/q2pro mod preset launcher. UI is raylib + raygui.
+
+<img src="2026-06-25-150515_hyprshot.png">
 
 ## Features
 
@@ -15,11 +17,16 @@ Small Quake II/q2pro mod preset launcher. UI is raylib + raygui, with no Qt/GTK/
 - Theme buttons: Cyber and Matrix neon-green
 - Direct q2pro launch on Linux and Windows
 
+## Notes
+
+- `.pkz` paks are .zip files in nature, easy to edit under Midnight Commander
+- r1q2 doesn't handle `.pkz` files
+
 ## Build
 
 ```sh
 cmake -S . -B build
-cmake --build build
+cmake --build build --config Release
 ```
 
 Windows with Visual Studio:
@@ -57,3 +64,12 @@ q2pro +set basedir <q2manager_exe_dir> +set game baseq2 +exec autoexec.cfg
 ```
 
 Windows symlink creation can require Developer Mode or elevated privileges.
+
+## TODO
+
+- configs handling
+- add better chiptunes music or remove it
+- optionally: mods handling
+- optionally: server browser
+- consider adding option to make configs/paks managing read-only
+
