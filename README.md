@@ -8,6 +8,7 @@ Small Quake II/q2pro mod preset launcher. UI is raylib + raygui, with no Qt/GTK/
 - Built-in file browser for engine, Quake II directory, packages, and cfg files
 - Presets with ordered `.pak`/`.pkz` package list and one `autoexec.cfg`
 - Packages are selected from `<q2manager_exe_dir>/.q2manager/paks`
+- Package and autoexec paths inside the game folder are saved relative in JSON
 - Per-launch symlinks are written into `<q2manager_exe_dir>/baseq2`
 - Ordered package symlinks named `q2m_00_name.pkz`, `q2m_01_name.pak`, etc.
 - Built-in procedural keygen-style background music with Play/Pause button, stopped by default

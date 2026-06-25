@@ -82,6 +82,7 @@ struct Settings {
     std::string enginePath;
     std::string quakeDir;
     std::string theme = "cyber";
+    int selectedPreset = 0;
     std::vector<Preset> presets;
 };
 
@@ -269,6 +270,32 @@ static fs::path ExecutableDir() {
 
 static fs::path ConfigPath() { return ExecutableDir() / "q2manager.json"; }
 
+static fs::path ExistingAbsolutePath(const fs::path &path);
+
+static bool IsParentRelativeEscape(const fs::path &path) {
+    for (const auto &part : path) {
+        if (part == "..") return true;
+    }
+    return false;
+}
+
+static fs::path ResolveGamePath(const std::string &value) {
+    fs::path path(value);
+    if (path.empty()) return path;
+    if (path.is_relative()) path = ExecutableDir() / path;
+    return ExistingAbsolutePath(path);
+}
+
+static std::string PortableGamePath(const std::string &value) {
+    if (value.empty()) return {};
+    std::error_code ec;
+    const fs::path base = ExistingAbsolutePath(ExecutableDir());
+    const fs::path path = ExistingAbsolutePath(value);
+    const fs::path rel = fs::relative(path, base, ec);
+    if (!ec && !rel.empty() && !IsParentRelativeEscape(rel)) return rel.generic_string();
+    return path.string();
+}
+
 static fs::path PakStoreDir(const std::string &quakeDir) {
     return fs::path(quakeDir) / ".q2manager" / "paks";
 }
@@ -340,6 +367,7 @@ static void ScanPakStore(App &app) {
 static void EnsurePreset(App &app) {
     if (app.settings.presets.empty()) app.settings.presets.push_back({"Vanilla", {}, {}, {}});
     app.selectedPreset = std::clamp(app.selectedPreset, 0, static_cast<int>(app.settings.presets.size()) - 1);
+    app.settings.selectedPreset = app.selectedPreset;
 }
 
 static Preset &CurrentPreset(App &app) {
@@ -491,18 +519,22 @@ static void LoadSettings(App &app) {
         in >> j;
         app.settings.enginePath = j.value("engine", "");
         app.settings.theme = j.value("theme", "cyber");
+        app.settings.selectedPreset = j.value("selected_preset", 0);
         for (const auto &p : j.value("presets", json::array())) {
             Preset preset;
             preset.name = p.value("name", "Preset");
             preset.autoexec = p.value("autoexec", "");
+            if (!preset.autoexec.empty()) preset.autoexec = ResolveGamePath(preset.autoexec).string();
             preset.extraArgs = p.value("extra_args", "");
             preset.packages = p.value("packages", std::vector<std::string>{});
+            for (auto &pkg : preset.packages) pkg = ResolveGamePath(pkg).string();
             app.settings.presets.push_back(std::move(preset));
         }
         app.status = "Loaded q2manager.json";
     } catch (const std::exception &e) {
         app.status = std::string("Config load failed: ") + e.what();
     }
+    app.selectedPreset = app.settings.selectedPreset;
     EnsurePreset(app);
     SyncBuffers(app);
 }
@@ -510,16 +542,20 @@ static void LoadSettings(App &app) {
 static void SaveSettings(const App &app) {
     json presets = json::array();
     for (const auto &p : app.settings.presets) {
+        std::vector<std::string> packages;
+        packages.reserve(p.packages.size());
+        for (const auto &pkg : p.packages) packages.push_back(PortableGamePath(pkg));
         presets.push_back({
             {"name", p.name},
-            {"packages", p.packages},
-            {"autoexec", p.autoexec},
+            {"packages", packages},
+            {"autoexec", PortableGamePath(p.autoexec)},
             {"extra_args", p.extraArgs},
         });
     }
     json j = {
         {"engine", app.settings.enginePath},
         {"theme", app.settings.theme},
+        {"selected_preset", app.selectedPreset},
         {"presets", presets},
     };
     std::ofstream out(ConfigPath());
@@ -991,8 +1027,10 @@ static void DrawMain(App &app) {
         }
         if (GuiButton(r, label.c_str())) {
             app.selectedPreset = i;
+            app.settings.selectedPreset = i;
             app.selectedPackage = -1;
             SyncBuffers(app);
+            SaveSettings(app);
         }
         if (selected) {
             GuiSetStyle(DEFAULT, BASE_COLOR_NORMAL, oldBase);
@@ -1000,7 +1038,7 @@ static void DrawMain(App &app) {
             GuiSetStyle(DEFAULT, BORDER_COLOR_NORMAL, oldBorder);
         }
     }
-    Rectangle presetTrack = {54, 384, 190, 10};
+    Rectangle presetTrack = {54, 374, 190, 10};
     DrawRectangleRec(presetTrack, theme.bgTop);
     DrawRectangleLinesEx(presetTrack, 1, theme.border);
     const float presetThumbWidth = maxPresetScroll > 0 ? std::max(38.0f, presetTrack.width * static_cast<float>(visiblePresets) / static_cast<float>(presetCount)) : presetTrack.width;
@@ -1011,27 +1049,46 @@ static void DrawMain(App &app) {
         const float t = std::clamp((GetMouseX() - presetTrack.x - presetThumbWidth * 0.5f) / (presetTrack.width - presetThumbWidth), 0.0f, 1.0f);
         app.presetScroll = static_cast<int>(std::round(t * static_cast<float>(maxPresetScroll)));
     }
-    if (GuiButton({54, 398, 58, 24}, "New")) {
+    if (GuiButton({54, 390, 58, 24}, "New")) {
         app.settings.presets.push_back({"Preset " + std::to_string(app.settings.presets.size() + 1), {}, {}, {}});
         app.selectedPreset = static_cast<int>(app.settings.presets.size()) - 1;
+        app.settings.selectedPreset = app.selectedPreset;
         app.presetScroll = std::max(0, static_cast<int>(app.settings.presets.size()) - visiblePresets);
         SyncBuffers(app);
         SaveSettings(app);
     }
-    if (GuiButton({120, 398, 58, 24}, "Clone")) {
+    if (GuiButton({120, 390, 58, 24}, "Clone")) {
         Preset clone = CurrentPreset(app);
         clone.name += " copy";
         app.settings.presets.push_back(std::move(clone));
         app.selectedPreset = static_cast<int>(app.settings.presets.size()) - 1;
+        app.settings.selectedPreset = app.selectedPreset;
         app.presetScroll = std::max(0, static_cast<int>(app.settings.presets.size()) - visiblePresets);
         app.selectedPackage = -1;
         SyncBuffers(app);
         SaveSettings(app);
     }
-    if (GuiButton({186, 398, 58, 24}, "Del") && app.settings.presets.size() > 1) {
+    if (GuiButton({186, 390, 58, 24}, "Del") && app.settings.presets.size() > 1) {
         app.settings.presets.erase(app.settings.presets.begin() + app.selectedPreset);
         app.selectedPreset = 0;
+        app.settings.selectedPreset = 0;
         app.presetScroll = 0;
+        SyncBuffers(app);
+        SaveSettings(app);
+    }
+    if (GuiButton({120, 420, 58, 24}, "Up") && app.selectedPreset > 0) {
+        std::swap(app.settings.presets[app.selectedPreset], app.settings.presets[app.selectedPreset - 1]);
+        --app.selectedPreset;
+        app.settings.selectedPreset = app.selectedPreset;
+        if (app.selectedPreset < app.presetScroll) app.presetScroll = app.selectedPreset;
+        SyncBuffers(app);
+        SaveSettings(app);
+    }
+    if (GuiButton({186, 420, 58, 24}, "Dn") && app.selectedPreset + 1 < static_cast<int>(app.settings.presets.size())) {
+        std::swap(app.settings.presets[app.selectedPreset], app.settings.presets[app.selectedPreset + 1]);
+        ++app.selectedPreset;
+        app.settings.selectedPreset = app.selectedPreset;
+        if (app.selectedPreset >= app.presetScroll + visiblePresets) app.presetScroll = app.selectedPreset - visiblePresets + 1;
         SyncBuffers(app);
         SaveSettings(app);
     }
