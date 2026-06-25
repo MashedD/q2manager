@@ -339,10 +339,10 @@ static int PackageIndex(const Preset &preset, const fs::path &path) {
 }
 
 static std::string DisplayPakName(const fs::path &path) {
-    std::string name = path.filename().string();
-    if (name.rfind("q2dl-", 0) == 0) name.erase(0, 5);
-    if (name.size() >= 4 && name.substr(name.size() - 4) == ".pkz") name.erase(name.size() - 4);
-    return name;
+    std::string filename = path.filename().string();
+    if (filename.rfind("q2dl-", 0) == 0) filename.erase(0, 5);
+    if (filename.size() >= 4 && filename.substr(filename.size() - 4) == ".pkz") filename.erase(filename.size() - 4);
+    return filename;
 }
 
 static void ScanPakStore(App &app) {
@@ -352,7 +352,7 @@ static void ScanPakStore(App &app) {
     std::error_code ec;
     fs::create_directories(pakStore, ec);
     if (ec) { app.status = "Create pak store failed: " + ec.message(); return; }
-    for (const auto &entry : fs::directory_iterator(pakStore, ec)) {
+    for (const auto &entry : fs::recursive_directory_iterator(pakStore, ec)) {
         if (entry.is_regular_file(ec) && HasExt(entry.path(), {".pak", ".pkz"})) {
             app.availablePackages.push_back(ExistingAbsolutePath(entry.path()).string());
         }
