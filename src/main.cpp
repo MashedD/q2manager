@@ -147,6 +147,7 @@ struct App {
     Browser browser;
     int selectedPreset = 0;
     int selectedPackage = -1;
+    int presetScroll = 0;
     int packageScroll = 0;
     std::vector<std::string> availablePackages;
     std::string scannedPakStore;
@@ -436,6 +437,45 @@ static void DrawAppText(const App &app, const std::string &text, int x, int y, f
 
 static void DrawMonoText(const App &app, const std::string &text, int x, int y, float size, Color color) {
     DrawTextEx(app.customMonoFont ? app.monoFont : (app.customFont ? app.font : GetFontDefault()), text.c_str(), {static_cast<float>(x), static_cast<float>(y)}, size, 1.0f, color);
+}
+
+static float TextWidth(const App &app, const std::string &text, float size) {
+    return MeasureTextEx(app.customFont ? app.font : GetFontDefault(), text.c_str(), size, 1.0f).x;
+}
+
+static std::string FitMiddleText(const App &app, const std::string &text, float maxWidth, float size) {
+    if (TextWidth(app, text, size) <= maxWidth) return text;
+    if (TextWidth(app, "...", size) > maxWidth) return "";
+
+    size_t left = std::min<size_t>(text.size(), 8);
+    size_t right = std::min<size_t>(text.size() - left, 8);
+    std::string best = text.substr(0, left) + "..." + text.substr(text.size() - right);
+
+    while (left + right + 3 < text.size()) {
+        std::string candidate;
+        if (left <= right) {
+            candidate = text.substr(0, left + 1) + "..." + text.substr(text.size() - right);
+            if (TextWidth(app, candidate, size) <= maxWidth) {
+                ++left;
+                best = std::move(candidate);
+                continue;
+            }
+        }
+        candidate = text.substr(0, left) + "..." + text.substr(text.size() - right - 1);
+        if (right + 1 <= text.size() - left && TextWidth(app, candidate, size) <= maxWidth) {
+            ++right;
+            best = std::move(candidate);
+            continue;
+        }
+        break;
+    }
+
+    while (TextWidth(app, best, size) > maxWidth && (left > 1 || right > 1)) {
+        if (left >= right && left > 1) --left;
+        else if (right > 1) --right;
+        best = text.substr(0, left) + "..." + text.substr(text.size() - right);
+    }
+    return best;
 }
 
 static void LoadSettings(App &app) {
@@ -923,17 +963,58 @@ static void DrawMain(App &app) {
 
     DrawRectangle(42, 142, 214, 286, theme.panelSoft);
     DrawAppText(app, "PRESETS", 54, 152, 15, theme.accent);
-    for (int i = 0; i < static_cast<int>(app.settings.presets.size()) && i < 8; ++i) {
-        Rectangle r = {54, static_cast<float>(176 + i * 26), 190, 23};
-        if (GuiButton(r, app.settings.presets[static_cast<size_t>(i)].name.c_str())) {
+    const Rectangle presetList = {54, 176, 190, 204};
+    const int presetRowH = 26;
+    const int visiblePresets = static_cast<int>(presetList.height) / presetRowH;
+    const int presetCount = static_cast<int>(app.settings.presets.size());
+    const int maxPresetScroll = std::max(0, presetCount - visiblePresets);
+    if (CheckCollisionPointRec(GetMousePosition(), presetList)) {
+        app.presetScroll += static_cast<int>(-GetMouseWheelMove());
+    }
+    app.presetScroll = std::clamp(app.presetScroll, 0, maxPresetScroll);
+    for (int row = 0; row < visiblePresets && app.presetScroll + row < presetCount; ++row) {
+        const int i = app.presetScroll + row;
+        Rectangle r = {54, static_cast<float>(176 + row * presetRowH), 190, 23};
+        const bool selected = i == app.selectedPreset;
+        const int oldBase = GuiGetStyle(DEFAULT, BASE_COLOR_NORMAL);
+        const int oldText = GuiGetStyle(DEFAULT, TEXT_COLOR_NORMAL);
+        const int oldBorder = GuiGetStyle(DEFAULT, BORDER_COLOR_NORMAL);
+        if (selected) {
+            GuiSetStyle(DEFAULT, BASE_COLOR_NORMAL, ColorToInt(theme.accent2));
+            GuiSetStyle(DEFAULT, TEXT_COLOR_NORMAL, ColorToInt(theme.bgBottom));
+            GuiSetStyle(DEFAULT, BORDER_COLOR_NORMAL, ColorToInt(theme.accent));
+        }
+        const std::string fullName = app.settings.presets[static_cast<size_t>(i)].name;
+        const std::string label = FitMiddleText(app, fullName, r.width - 18.0f, 16.0f);
+        if (CheckCollisionPointRec(GetMousePosition(), r) && label != fullName) {
+            app.status = fullName;
+        }
+        if (GuiButton(r, label.c_str())) {
             app.selectedPreset = i;
             app.selectedPackage = -1;
             SyncBuffers(app);
         }
+        if (selected) {
+            GuiSetStyle(DEFAULT, BASE_COLOR_NORMAL, oldBase);
+            GuiSetStyle(DEFAULT, TEXT_COLOR_NORMAL, oldText);
+            GuiSetStyle(DEFAULT, BORDER_COLOR_NORMAL, oldBorder);
+        }
+    }
+    Rectangle presetTrack = {54, 384, 190, 10};
+    DrawRectangleRec(presetTrack, theme.bgTop);
+    DrawRectangleLinesEx(presetTrack, 1, theme.border);
+    const float presetThumbWidth = maxPresetScroll > 0 ? std::max(38.0f, presetTrack.width * static_cast<float>(visiblePresets) / static_cast<float>(presetCount)) : presetTrack.width;
+    const float presetThumbX = maxPresetScroll > 0 ? presetTrack.x + (presetTrack.width - presetThumbWidth) * static_cast<float>(app.presetScroll) / static_cast<float>(maxPresetScroll) : presetTrack.x;
+    Rectangle presetThumb = {presetThumbX, presetTrack.y + 2, presetThumbWidth, presetTrack.height - 4};
+    DrawRectangleRec(presetThumb, theme.accent2);
+    if (maxPresetScroll > 0 && CheckCollisionPointRec(GetMousePosition(), presetTrack) && IsMouseButtonDown(MOUSE_LEFT_BUTTON)) {
+        const float t = std::clamp((GetMouseX() - presetTrack.x - presetThumbWidth * 0.5f) / (presetTrack.width - presetThumbWidth), 0.0f, 1.0f);
+        app.presetScroll = static_cast<int>(std::round(t * static_cast<float>(maxPresetScroll)));
     }
     if (GuiButton({54, 398, 58, 24}, "New")) {
         app.settings.presets.push_back({"Preset " + std::to_string(app.settings.presets.size() + 1), {}, {}, {}});
         app.selectedPreset = static_cast<int>(app.settings.presets.size()) - 1;
+        app.presetScroll = std::max(0, static_cast<int>(app.settings.presets.size()) - visiblePresets);
         SyncBuffers(app);
         SaveSettings(app);
     }
@@ -942,6 +1023,7 @@ static void DrawMain(App &app) {
         clone.name += " copy";
         app.settings.presets.push_back(std::move(clone));
         app.selectedPreset = static_cast<int>(app.settings.presets.size()) - 1;
+        app.presetScroll = std::max(0, static_cast<int>(app.settings.presets.size()) - visiblePresets);
         app.selectedPackage = -1;
         SyncBuffers(app);
         SaveSettings(app);
@@ -949,6 +1031,7 @@ static void DrawMain(App &app) {
     if (GuiButton({186, 398, 58, 24}, "Del") && app.settings.presets.size() > 1) {
         app.settings.presets.erase(app.settings.presets.begin() + app.selectedPreset);
         app.selectedPreset = 0;
+        app.presetScroll = 0;
         SyncBuffers(app);
         SaveSettings(app);
     }
