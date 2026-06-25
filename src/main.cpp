@@ -38,6 +38,8 @@
 #include <sstream>
 #include <string>
 #include <system_error>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #ifdef _WIN32
@@ -133,6 +135,7 @@ static const ThemePalette &Theme(const App &app);
 
 enum class BrowserTarget { None, Engine, QuakeDir, Package, Autoexec };
 enum class TextField { None, Engine, PresetName, ExtraArgs };
+enum class PendingAction { None, SwitchPreset, NewPreset, ClonePreset, DeletePreset, MovePresetUp, MovePresetDown, Quit };
 
 struct Browser {
     bool open = false;
@@ -158,6 +161,9 @@ struct App {
     std::array<char, 512> argsBuf{};
     std::string status = "Set engine and Quake dir, create preset, launch.";
     bool quitRequested = false;
+    bool confirmUnsavedOpen = false;
+    PendingAction pendingAction = PendingAction::None;
+    int pendingPresetIndex = 0;
     Font font{};
     bool customFont = false;
     Font monoFont{};
@@ -327,15 +333,12 @@ static bool IsInsideDir(const fs::path &path, const fs::path &dir) {
     return true;
 }
 
-static bool SamePath(const fs::path &a, const fs::path &b) {
-    return ExistingAbsolutePath(a) == ExistingAbsolutePath(b);
+static std::string PathKey(const fs::path &path) {
+    return ExistingAbsolutePath(path).generic_string();
 }
 
-static int PackageIndex(const Preset &preset, const fs::path &path) {
-    for (int i = 0; i < static_cast<int>(preset.packages.size()); ++i) {
-        if (SamePath(preset.packages[static_cast<size_t>(i)], path)) return i;
-    }
-    return -1;
+static std::string ResolveGamePathString(const std::string &value) {
+    return ResolveGamePath(value).generic_string();
 }
 
 static std::string DisplayPakName(const fs::path &path) {
@@ -354,7 +357,7 @@ static void ScanPakStore(App &app) {
     if (ec) { app.status = "Create pak store failed: " + ec.message(); return; }
     for (const auto &entry : fs::recursive_directory_iterator(pakStore, ec)) {
         if (entry.is_regular_file(ec) && HasExt(entry.path(), {".pak", ".pkz"})) {
-            app.availablePackages.push_back(ExistingAbsolutePath(entry.path()).string());
+            app.availablePackages.push_back(PathKey(entry.path()));
         }
     }
     if (ec) { app.status = "Scan pak store failed: " + ec.message(); return; }
@@ -375,11 +378,32 @@ static Preset &CurrentPreset(App &app) {
     return app.settings.presets[static_cast<size_t>(app.selectedPreset)];
 }
 
+static void SaveSettings(const App &app);
+
 static void SyncBuffers(App &app) {
     EnsurePreset(app);
     CopyToBuf(app.settings.enginePath, app.engineBuf.data(), app.engineBuf.size());
     CopyToBuf(CurrentPreset(app).name, app.nameBuf.data(), app.nameBuf.size());
     CopyToBuf(CurrentPreset(app).extraArgs, app.argsBuf.data(), app.argsBuf.size());
+}
+
+static bool PresetHasBufferedChanges(App &app) {
+    Preset &preset = CurrentPreset(app);
+    return preset.name != app.nameBuf.data() || preset.extraArgs != app.argsBuf.data();
+}
+
+static void CommitCurrentPresetBuffers(App &app) {
+    app.settings.enginePath = app.engineBuf.data();
+    app.settings.quakeDir = ExecutableDir().string();
+    Preset &preset = CurrentPreset(app);
+    preset.name = app.nameBuf.data();
+    preset.extraArgs = app.argsBuf.data();
+    app.settings.selectedPreset = app.selectedPreset;
+    SaveSettings(app);
+}
+
+static void DiscardCurrentPresetBuffers(App &app) {
+    SyncBuffers(app);
 }
 
 static void LoadReadableFont(App &app) {
@@ -524,10 +548,10 @@ static void LoadSettings(App &app) {
             Preset preset;
             preset.name = p.value("name", "Preset");
             preset.autoexec = p.value("autoexec", "");
-            if (!preset.autoexec.empty()) preset.autoexec = ResolveGamePath(preset.autoexec).string();
+            if (!preset.autoexec.empty()) preset.autoexec = ResolveGamePathString(preset.autoexec);
             preset.extraArgs = p.value("extra_args", "");
             preset.packages = p.value("packages", std::vector<std::string>{});
-            for (auto &pkg : preset.packages) pkg = ResolveGamePath(pkg).string();
+            for (auto &pkg : preset.packages) pkg = ResolveGamePathString(pkg);
             app.settings.presets.push_back(std::move(preset));
         }
         app.status = "Loaded q2manager.json";
@@ -604,7 +628,7 @@ static void SelectBrowserPath(App &app, const fs::path &path) {
         return;
     }
     Preset &preset = CurrentPreset(app);
-    const std::string value = path.string();
+    const std::string value = PathKey(path);
     switch (app.browser.target) {
         case BrowserTarget::Engine: app.settings.enginePath = value; break;
         case BrowserTarget::QuakeDir: app.settings.quakeDir = value; break;
@@ -811,6 +835,115 @@ static void LaunchPreset(App &app) {
     app.status = "Launched " + preset.name + " using " + baseq2Dir.string();
 }
 
+static void ExecutePendingAction(App &app) {
+    constexpr int visiblePresets = 7;
+    switch (app.pendingAction) {
+        case PendingAction::SwitchPreset:
+            app.selectedPreset = std::clamp(app.pendingPresetIndex, 0, static_cast<int>(app.settings.presets.size()) - 1);
+            app.settings.selectedPreset = app.selectedPreset;
+            app.selectedPackage = -1;
+            SyncBuffers(app);
+            SaveSettings(app);
+            break;
+        case PendingAction::NewPreset:
+            app.settings.presets.push_back({"Preset " + std::to_string(app.settings.presets.size() + 1), {}, {}, {}});
+            app.selectedPreset = static_cast<int>(app.settings.presets.size()) - 1;
+            app.settings.selectedPreset = app.selectedPreset;
+            app.presetScroll = std::max(0, static_cast<int>(app.settings.presets.size()) - visiblePresets);
+            app.selectedPackage = -1;
+            SyncBuffers(app);
+            SaveSettings(app);
+            break;
+        case PendingAction::ClonePreset: {
+            Preset clone = CurrentPreset(app);
+            clone.name += " copy";
+            app.settings.presets.push_back(std::move(clone));
+            app.selectedPreset = static_cast<int>(app.settings.presets.size()) - 1;
+            app.settings.selectedPreset = app.selectedPreset;
+            app.presetScroll = std::max(0, static_cast<int>(app.settings.presets.size()) - visiblePresets);
+            app.selectedPackage = -1;
+            SyncBuffers(app);
+            SaveSettings(app);
+            break;
+        }
+        case PendingAction::DeletePreset:
+            if (app.settings.presets.size() > 1) {
+                app.settings.presets.erase(app.settings.presets.begin() + app.selectedPreset);
+                app.selectedPreset = 0;
+                app.settings.selectedPreset = 0;
+                app.presetScroll = 0;
+                app.selectedPackage = -1;
+                SyncBuffers(app);
+                SaveSettings(app);
+            }
+            break;
+        case PendingAction::MovePresetUp:
+            if (app.selectedPreset > 0) {
+                std::swap(app.settings.presets[app.selectedPreset], app.settings.presets[app.selectedPreset - 1]);
+                --app.selectedPreset;
+                app.settings.selectedPreset = app.selectedPreset;
+                if (app.selectedPreset < app.presetScroll) app.presetScroll = app.selectedPreset;
+                SyncBuffers(app);
+                SaveSettings(app);
+            }
+            break;
+        case PendingAction::MovePresetDown:
+            if (app.selectedPreset + 1 < static_cast<int>(app.settings.presets.size())) {
+                std::swap(app.settings.presets[app.selectedPreset], app.settings.presets[app.selectedPreset + 1]);
+                ++app.selectedPreset;
+                app.settings.selectedPreset = app.selectedPreset;
+                if (app.selectedPreset >= app.presetScroll + visiblePresets) app.presetScroll = app.selectedPreset - visiblePresets + 1;
+                SyncBuffers(app);
+                SaveSettings(app);
+            }
+            break;
+        case PendingAction::Quit:
+            app.quitRequested = true;
+            break;
+        case PendingAction::None:
+            break;
+    }
+    app.pendingAction = PendingAction::None;
+    app.pendingPresetIndex = 0;
+}
+
+static void RequestAction(App &app, PendingAction action, int presetIndex = 0) {
+    app.pendingAction = action;
+    app.pendingPresetIndex = presetIndex;
+    if (PresetHasBufferedChanges(app)) {
+        app.confirmUnsavedOpen = true;
+        return;
+    }
+    ExecutePendingAction(app);
+}
+
+static void DrawUnsavedModal(App &app) {
+    if (!app.confirmUnsavedOpen) return;
+    const auto &theme = Theme(app);
+    DrawRectangle(0, 0, GetScreenWidth(), GetScreenHeight(), Color{0, 0, 0, 150});
+    Rectangle box = {210, 192, 380, 152};
+    DrawRectangleRec(box, theme.panelSoft);
+    DrawRectangleLinesEx(box, 2, theme.accent);
+    DrawAppText(app, "Unsaved preset changes", 238, 216, 20, theme.accent);
+    DrawAppText(app, "Save changes before continuing?", 238, 248, 15, theme.text);
+
+    if (GuiButton({238, 292, 92, 30}, "Save")) {
+        CommitCurrentPresetBuffers(app);
+        app.confirmUnsavedOpen = false;
+        ExecutePendingAction(app);
+    }
+    if (GuiButton({354, 292, 92, 30}, "Discard")) {
+        DiscardCurrentPresetBuffers(app);
+        app.confirmUnsavedOpen = false;
+        ExecutePendingAction(app);
+    }
+    if (GuiButton({470, 292, 92, 30}, "Cancel")) {
+        app.confirmUnsavedOpen = false;
+        app.pendingAction = PendingAction::None;
+        app.pendingPresetIndex = 0;
+    }
+}
+
 static void DrawBackground(const App &app) {
     const auto &theme = Theme(app);
     ClearBackground(theme.bgTop);
@@ -858,7 +991,7 @@ static void DrawBrowser(App &app) {
     DrawRectangleRec(list, theme.bgTop);
     const int rowH = 24;
     const int visible = static_cast<int>(list.height) / rowH;
-    b.scroll += static_cast<int>(-GetMouseWheelMove());
+    if (!app.confirmUnsavedOpen) b.scroll += static_cast<int>(-GetMouseWheelMove());
     b.scroll = std::clamp(b.scroll, 0, std::max(0, static_cast<int>(b.entries.size()) - visible));
     for (int i = 0; i < visible && b.scroll + i < static_cast<int>(b.entries.size()); ++i) {
         const auto &entry = b.entries[static_cast<size_t>(b.scroll + i)];
@@ -868,7 +1001,7 @@ static void DrawBrowser(App &app) {
         const std::string label = std::string(entry.is_directory() ? "[DIR] " : "      ") + entry.path().filename().string();
         DrawAppText(app, label, static_cast<int>(row.x + 8), static_cast<int>(row.y + 4), 15,
                     AcceptsTarget(b.target, entry.path()) || entry.is_directory() ? theme.text : theme.muted);
-        if (hover && IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
+        if (!app.confirmUnsavedOpen && hover && IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
             if (entry.is_directory()) { b.current = entry.path(); RefreshBrowser(b); }
             else SelectBrowserPath(app, entry.path());
         }
@@ -887,35 +1020,44 @@ static void DrawPackageToggleList(App &app, Preset &preset) {
     const std::string currentStore = ExistingAbsolutePath(pakStore).string();
     if (app.scannedPakStore != currentStore) ScanPakStore(app);
 
-    DrawAppText(app, "PACKAGES", 276, 230, 15, theme.accent);
-    if (GuiButton({574, 226, 74, 22}, "Refresh")) ScanPakStore(app);
+    DrawAppText(app, "PACKAGES", 276, 184, 15, theme.accent);
+    if (GuiButton({574, 180, 74, 22}, "Refresh")) ScanPakStore(app);
 
-    Rectangle list = {276, 250, 372, 124};
+    Rectangle list = {276, 204, 372, 202};
     DrawRectangleRec(list, theme.bgTop);
     const int rowH = 24;
     const int visible = static_cast<int>(list.height) / rowH;
+    std::unordered_map<std::string, int> activeIndexByPath;
+    activeIndexByPath.reserve(preset.packages.size());
+    for (int i = 0; i < static_cast<int>(preset.packages.size()); ++i) {
+        activeIndexByPath.emplace(preset.packages[static_cast<size_t>(i)], i);
+    }
+    std::unordered_set<std::string> availablePaths;
+    availablePaths.reserve(app.availablePackages.size());
+    for (const auto &pkg : app.availablePackages) availablePaths.insert(pkg);
+
     std::vector<std::string> missingPackages;
     for (const auto &pkg : preset.packages) {
-        if (std::none_of(app.availablePackages.begin(), app.availablePackages.end(), [&](const std::string &available) { return SamePath(pkg, available); })) {
+        if (!availablePaths.contains(pkg)) {
             missingPackages.push_back(pkg);
         }
     }
     const int missingCount = static_cast<int>(missingPackages.size());
     const int totalRows = static_cast<int>(app.availablePackages.size()) + missingCount;
-    if (CheckCollisionPointRec(GetMousePosition(), list)) {
+    if (!app.confirmUnsavedOpen && CheckCollisionPointRec(GetMousePosition(), list)) {
         app.packageScroll += static_cast<int>(-GetMouseWheelMove());
     }
     app.packageScroll = std::clamp(app.packageScroll, 0, std::max(0, totalRows - visible));
 
     const int maxScroll = std::max(0, totalRows - visible);
-    Rectangle scrollTrack = {276, 378, 372, 12};
+    Rectangle scrollTrack = {276, 410, 372, 12};
     DrawRectangleRec(scrollTrack, theme.panelSoft);
     DrawRectangleLinesEx(scrollTrack, 1, theme.border);
     const float thumbWidth = maxScroll > 0 ? std::max(42.0f, scrollTrack.width * static_cast<float>(visible) / static_cast<float>(totalRows)) : scrollTrack.width;
     const float thumbX = maxScroll > 0 ? scrollTrack.x + (scrollTrack.width - thumbWidth) * static_cast<float>(app.packageScroll) / static_cast<float>(maxScroll) : scrollTrack.x;
     Rectangle scrollThumb = {thumbX, scrollTrack.y + 2, thumbWidth, scrollTrack.height - 4};
     DrawRectangleRec(scrollThumb, theme.accent2);
-    if (maxScroll > 0 && CheckCollisionPointRec(GetMousePosition(), scrollTrack) && IsMouseButtonDown(MOUSE_LEFT_BUTTON)) {
+    if (!app.confirmUnsavedOpen && maxScroll > 0 && CheckCollisionPointRec(GetMousePosition(), scrollTrack) && IsMouseButtonDown(MOUSE_LEFT_BUTTON)) {
         const float t = std::clamp((GetMouseX() - scrollTrack.x - thumbWidth * 0.5f) / (scrollTrack.width - thumbWidth), 0.0f, 1.0f);
         app.packageScroll = static_cast<int>(std::round(t * static_cast<float>(maxScroll)));
     }
@@ -924,8 +1066,9 @@ static void DrawPackageToggleList(App &app, Preset &preset) {
     int rowIndex = 0;
     auto drawRow = [&](const std::string &path, bool missing) {
         if (rowIndex++ < app.packageScroll || drawn >= visible) return;
-        const int activeIndex = PackageIndex(preset, path);
-        Rectangle r = {284, static_cast<float>(258 + drawn * rowH), 356, 22};
+        const auto activeIt = activeIndexByPath.find(path);
+        const int activeIndex = activeIt == activeIndexByPath.end() ? -1 : activeIt->second;
+        Rectangle r = {list.x + 8, list.y + 8 + static_cast<float>(drawn * rowH), list.width - 16, 22};
         const bool hover = CheckCollisionPointRec(GetMousePosition(), r);
         if (hover) DrawRectangleRec(r, theme.hover);
         if (app.selectedPackage == activeIndex && activeIndex >= 0) DrawRectangleLinesEx(r, 1, theme.accent2);
@@ -941,10 +1084,10 @@ static void DrawPackageToggleList(App &app, Preset &preset) {
         DrawMonoText(app, label.str(), static_cast<int>(r.x + 6), static_cast<int>(r.y + 3), 14,
                      missing ? Color{255, 115, 115, 255} : theme.text);
 
-        if (hover && IsMouseButtonPressed(MOUSE_RIGHT_BUTTON) && activeIndex >= 0) {
+        if (!app.confirmUnsavedOpen && hover && IsMouseButtonPressed(MOUSE_RIGHT_BUTTON) && activeIndex >= 0) {
             app.selectedPackage = activeIndex;
         }
-        if (hover && IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
+        if (!app.confirmUnsavedOpen && hover && IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
             if (activeIndex >= 0) {
                 preset.packages.erase(preset.packages.begin() + activeIndex);
                 app.selectedPackage = -1;
@@ -960,24 +1103,24 @@ static void DrawPackageToggleList(App &app, Preset &preset) {
     for (const auto &pkg : app.availablePackages) drawRow(pkg, false);
     for (const auto &pkg : missingPackages) drawRow(pkg, true);
 
-    if (GuiButton({660, 250, 38, 24}, "Up") && app.selectedPackage > 0) {
+    if (GuiButton({660, 204, 38, 24}, "Up") && app.selectedPackage > 0) {
         std::swap(preset.packages[app.selectedPackage], preset.packages[app.selectedPackage - 1]);
         --app.selectedPackage;
         SaveSettings(app);
     }
-    if (GuiButton({706, 250, 38, 24}, "Dn") && app.selectedPackage >= 0 && app.selectedPackage + 1 < static_cast<int>(preset.packages.size())) {
+    if (GuiButton({706, 204, 38, 24}, "Dn") && app.selectedPackage >= 0 && app.selectedPackage + 1 < static_cast<int>(preset.packages.size())) {
         std::swap(preset.packages[app.selectedPackage], preset.packages[app.selectedPackage + 1]);
         ++app.selectedPackage;
         SaveSettings(app);
     }
-    DrawAppText(app, "left: toggle", 660, 284, 12, theme.muted);
-    DrawAppText(app, "right: select", 660, 302, 12, theme.muted);
+    DrawAppText(app, "left: toggle", 660, 238, 12, theme.muted);
+    DrawAppText(app, "right: select", 660, 256, 12, theme.muted);
 }
 
 static void DrawMain(App &app) {
     const auto &theme = Theme(app);
     DrawBackground(app);
-    if (GuiButton({744, 18, 34, 28}, "X")) app.quitRequested = true;
+    if (GuiButton({744, 18, 34, 28}, "X")) RequestAction(app, PendingAction::Quit);
     if (GuiButton({676, 18, 58, 28}, app.musicPlaying ? "Pause" : "Play")) ToggleMusic(app);
     if (GuiButton({506, 18, 78, 28}, "Cyber")) {
         app.settings.theme = "cyber";
@@ -1004,7 +1147,7 @@ static void DrawMain(App &app) {
     const int visiblePresets = static_cast<int>(presetList.height) / presetRowH;
     const int presetCount = static_cast<int>(app.settings.presets.size());
     const int maxPresetScroll = std::max(0, presetCount - visiblePresets);
-    if (CheckCollisionPointRec(GetMousePosition(), presetList)) {
+    if (!app.confirmUnsavedOpen && CheckCollisionPointRec(GetMousePosition(), presetList)) {
         app.presetScroll += static_cast<int>(-GetMouseWheelMove());
     }
     app.presetScroll = std::clamp(app.presetScroll, 0, maxPresetScroll);
@@ -1022,15 +1165,11 @@ static void DrawMain(App &app) {
         }
         const std::string fullName = app.settings.presets[static_cast<size_t>(i)].name;
         const std::string label = FitMiddleText(app, fullName, r.width - 18.0f, 16.0f);
-        if (CheckCollisionPointRec(GetMousePosition(), r) && label != fullName) {
+        if (!app.confirmUnsavedOpen && CheckCollisionPointRec(GetMousePosition(), r) && label != fullName) {
             app.status = fullName;
         }
         if (GuiButton(r, label.c_str())) {
-            app.selectedPreset = i;
-            app.settings.selectedPreset = i;
-            app.selectedPackage = -1;
-            SyncBuffers(app);
-            SaveSettings(app);
+            RequestAction(app, PendingAction::SwitchPreset, i);
         }
         if (selected) {
             GuiSetStyle(DEFAULT, BASE_COLOR_NORMAL, oldBase);
@@ -1045,58 +1184,30 @@ static void DrawMain(App &app) {
     const float presetThumbX = maxPresetScroll > 0 ? presetTrack.x + (presetTrack.width - presetThumbWidth) * static_cast<float>(app.presetScroll) / static_cast<float>(maxPresetScroll) : presetTrack.x;
     Rectangle presetThumb = {presetThumbX, presetTrack.y + 2, presetThumbWidth, presetTrack.height - 4};
     DrawRectangleRec(presetThumb, theme.accent2);
-    if (maxPresetScroll > 0 && CheckCollisionPointRec(GetMousePosition(), presetTrack) && IsMouseButtonDown(MOUSE_LEFT_BUTTON)) {
+    if (!app.confirmUnsavedOpen && maxPresetScroll > 0 && CheckCollisionPointRec(GetMousePosition(), presetTrack) && IsMouseButtonDown(MOUSE_LEFT_BUTTON)) {
         const float t = std::clamp((GetMouseX() - presetTrack.x - presetThumbWidth * 0.5f) / (presetTrack.width - presetThumbWidth), 0.0f, 1.0f);
         app.presetScroll = static_cast<int>(std::round(t * static_cast<float>(maxPresetScroll)));
     }
     if (GuiButton({54, 390, 58, 24}, "New")) {
-        app.settings.presets.push_back({"Preset " + std::to_string(app.settings.presets.size() + 1), {}, {}, {}});
-        app.selectedPreset = static_cast<int>(app.settings.presets.size()) - 1;
-        app.settings.selectedPreset = app.selectedPreset;
-        app.presetScroll = std::max(0, static_cast<int>(app.settings.presets.size()) - visiblePresets);
-        SyncBuffers(app);
-        SaveSettings(app);
+        RequestAction(app, PendingAction::NewPreset);
     }
     if (GuiButton({120, 390, 58, 24}, "Clone")) {
-        Preset clone = CurrentPreset(app);
-        clone.name += " copy";
-        app.settings.presets.push_back(std::move(clone));
-        app.selectedPreset = static_cast<int>(app.settings.presets.size()) - 1;
-        app.settings.selectedPreset = app.selectedPreset;
-        app.presetScroll = std::max(0, static_cast<int>(app.settings.presets.size()) - visiblePresets);
-        app.selectedPackage = -1;
-        SyncBuffers(app);
-        SaveSettings(app);
+        RequestAction(app, PendingAction::ClonePreset);
     }
     if (GuiButton({186, 390, 58, 24}, "Del") && app.settings.presets.size() > 1) {
-        app.settings.presets.erase(app.settings.presets.begin() + app.selectedPreset);
-        app.selectedPreset = 0;
-        app.settings.selectedPreset = 0;
-        app.presetScroll = 0;
-        SyncBuffers(app);
-        SaveSettings(app);
+        RequestAction(app, PendingAction::DeletePreset);
     }
     if (GuiButton({120, 420, 58, 24}, "Up") && app.selectedPreset > 0) {
-        std::swap(app.settings.presets[app.selectedPreset], app.settings.presets[app.selectedPreset - 1]);
-        --app.selectedPreset;
-        app.settings.selectedPreset = app.selectedPreset;
-        if (app.selectedPreset < app.presetScroll) app.presetScroll = app.selectedPreset;
-        SyncBuffers(app);
-        SaveSettings(app);
+        RequestAction(app, PendingAction::MovePresetUp);
     }
     if (GuiButton({186, 420, 58, 24}, "Dn") && app.selectedPreset + 1 < static_cast<int>(app.settings.presets.size())) {
-        std::swap(app.settings.presets[app.selectedPreset], app.settings.presets[app.selectedPreset + 1]);
-        ++app.selectedPreset;
-        app.settings.selectedPreset = app.selectedPreset;
-        if (app.selectedPreset >= app.presetScroll + visiblePresets) app.presetScroll = app.selectedPreset - visiblePresets + 1;
-        SyncBuffers(app);
-        SaveSettings(app);
+        RequestAction(app, PendingAction::MovePresetDown);
     }
 
     Preset &preset = CurrentPreset(app);
-    GuiLabel({276, 190, 90, 22}, "Name");
-    DrawTextInput(app, {340, 188, 240, 26}, app.nameBuf.data(), app.nameBuf.size(), TextField::PresetName);
-    if (GuiButton({594, 188, 82, 26}, "Save")) {
+    GuiLabel({276, 146, 90, 22}, "Name");
+    DrawTextInput(app, {340, 144, 240, 26}, app.nameBuf.data(), app.nameBuf.size(), TextField::PresetName);
+    if (GuiButton({594, 144, 82, 26}, "Save")) {
         app.settings.enginePath = app.engineBuf.data();
         app.settings.quakeDir = ExecutableDir().string();
         preset.name = app.nameBuf.data();
@@ -1107,14 +1218,14 @@ static void DrawMain(App &app) {
 
     DrawPackageToggleList(app, preset);
 
-    GuiLabel({276, 394, 80, 22}, "Autoexec");
+    GuiLabel({276, 426, 80, 22}, "Autoexec");
     const std::string cfg = preset.autoexec.empty() ? "(none)" : fs::path(preset.autoexec).filename().string();
-    DrawAppText(app, cfg, 354, 398, 14, theme.text);
-    if (GuiButton({660, 390, 84, 24}, "Choose")) OpenBrowser(app, BrowserTarget::Autoexec, app.settings.quakeDir);
+    DrawAppText(app, cfg, 354, 430, 14, theme.text);
+    if (GuiButton({660, 422, 84, 24}, "Choose")) OpenBrowser(app, BrowserTarget::Autoexec, app.settings.quakeDir);
 
-    GuiLabel({276, 430, 80, 22}, "Extra Args");
-    DrawTextInput(app, {354, 428, 290, 26}, app.argsBuf.data(), app.argsBuf.size(), TextField::ExtraArgs);
-    if (GuiButton({660, 428, 84, 32}, "Launch")) LaunchPreset(app);
+    GuiLabel({276, 462, 80, 22}, "Extra Args");
+    DrawTextInput(app, {354, 460, 290, 26}, app.argsBuf.data(), app.argsBuf.size(), TextField::ExtraArgs);
+    if (GuiButton({660, 460, 84, 32}, "Launch")) LaunchPreset(app);
 
     DrawRectangle(24, 520, 752, 28, theme.status);
     DrawAppText(app, app.status, 34, 527, 14, theme.text);
@@ -1133,10 +1244,16 @@ int main() {
     LoadReadableFont(app);
     LoadMonospaceFont(app);
     ApplyStyle(app);
-    while (!WindowShouldClose() && !app.quitRequested) {
+    while (!app.quitRequested) {
+        if (WindowShouldClose()) RequestAction(app, PendingAction::Quit);
         BeginDrawing();
+        if (app.confirmUnsavedOpen) GuiLock();
         DrawMain(app);
+        if (app.confirmUnsavedOpen) GuiUnlock();
+        if (app.confirmUnsavedOpen) GuiLock();
         if (app.browser.open) DrawBrowser(app);
+        if (app.confirmUnsavedOpen) GuiUnlock();
+        DrawUnsavedModal(app);
         EndDrawing();
     }
     app.settings.enginePath = app.engineBuf.data();
