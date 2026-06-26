@@ -1076,9 +1076,9 @@ static void DrawPackageToggleList(App &app, Preset &preset) {
         std::ostringstream label;
         if (activeIndex >= 0) {
             if (activeIndex + 1 < 10) label << '0';
-            label << activeIndex + 1 << " [x] ";
+            label << activeIndex + 1 << "  ";
         } else {
-            label << "-- [ ] ";
+            label << "    ";
         }
         label << (missing ? "missing: " : "") << DisplayPakName(path);
         DrawMonoText(app, label.str(), static_cast<int>(r.x + 6), static_cast<int>(r.y + 3), 14,
