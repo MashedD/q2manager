@@ -13,7 +13,7 @@ Small Quake II/q2pro mod preset launcher. UI is raylib + raygui.
 - Configs are selected from `<q2manager_exe_dir>/.q2manager/configs`
 - Package/config paths inside the game folder are saved relative in JSON
 - Per-launch symlinks are written into `<q2manager_exe_dir>/baseq2`
-- Ordered package symlinks named `q2m_00_name.pkz`, `q2m_01_name.pak`, etc.
+- Ordered package symlinks named `q2m_pak_00_name.pkz`, `q2m_pak_01_name.pak`, etc.
 - Built-in procedural keygen-style background music with Play/Pause button, stopped by default
 - Theme buttons: Cyber and Matrix neon-green
 - Direct q2pro launch on Linux and Windows
@@ -54,11 +54,13 @@ Launch creates symlinks in:
 <q2manager_exe_dir>/baseq2/
 ```
 
-Package list order is encoded into symlink names with `q2m_NN_` prefixes, so q2pro sees deterministic package ordering when scanning `baseq2`.
+Package list order is encoded into symlink names with `q2m_pak_NN_` prefixes, so q2pro sees deterministic package ordering when scanning `baseq2`.
 
 Package panel shows every `.pak`/`.pkz` from `.q2manager/paks`. Left-click a row to toggle it for the current preset. Active rows show their load order. Right-click an active row to select it, then use `Up`/`Dn` to reorder.
 
 Configs panel shows every `.cfg` from `.q2manager/configs` recursively. Left-click a config to toggle it for the current preset. Active rows show exec order. Right-click a config to select it, then use `Up`/`Dn` to reorder if active. `Personal` marks selected config as global personal config, executed last for every preset. `Clear Pers` removes it.
+
+Selected configs are symlinked into `baseq2` as `q2m_cfg_NN_name.cfg`, and personal config as `q2m_personal_name.cfg`. Generated `autoexec.cfg` only execs those local names because q2pro does not load `..` paths from `baseq2`.
 
 If `<q2manager_exe_dir>/baseq2/autoexec.cfg` already exists and was not created by q2manager, it is renamed to a dated backup like `autoexec.cfg.2026-06-24` before q2manager writes generated autoexec. q2manager tracks its own generated autoexec with `<q2manager_exe_dir>/baseq2/.q2manager_autoexec`.
 
