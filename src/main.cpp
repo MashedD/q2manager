@@ -76,7 +76,7 @@ static MusicSynth gMusicSynth;
 struct Preset {
     std::string name = "New preset";
     std::vector<std::string> packages;
-    std::string autoexec;
+    std::vector<std::string> configs;
     std::string extraArgs;
 };
 
@@ -84,6 +84,7 @@ struct Settings {
     std::string enginePath;
     std::string quakeDir;
     std::string theme = "cyber";
+    std::string personalConfig;
     int selectedPreset = 0;
     std::vector<Preset> presets;
 };
@@ -152,6 +153,8 @@ struct App {
     Browser browser;
     int selectedPreset = 0;
     int selectedPackage = -1;
+    int selectedConfig = -1;
+    std::string selectedConfigPath;
     int presetScroll = 0;
     int packageScroll = 0;
     int configScroll = 0;
@@ -580,12 +583,16 @@ static void LoadSettings(App &app) {
         in >> j;
         app.settings.enginePath = j.value("engine", "");
         app.settings.theme = j.value("theme", "cyber");
+        app.settings.personalConfig = j.value("personal_config", "");
+        if (!app.settings.personalConfig.empty()) app.settings.personalConfig = ResolveGamePathString(app.settings.personalConfig);
         app.settings.selectedPreset = j.value("selected_preset", 0);
         for (const auto &p : j.value("presets", json::array())) {
             Preset preset;
             preset.name = p.value("name", "Preset");
-            preset.autoexec = p.value("autoexec", "");
-            if (!preset.autoexec.empty()) preset.autoexec = ResolveGamePathString(preset.autoexec);
+            preset.configs = p.value("configs", std::vector<std::string>{});
+            const std::string legacyAutoexec = p.value("autoexec", "");
+            if (preset.configs.empty() && !legacyAutoexec.empty()) preset.configs.push_back(legacyAutoexec);
+            for (auto &cfg : preset.configs) cfg = ResolveGamePathString(cfg);
             preset.extraArgs = p.value("extra_args", "");
             preset.packages = p.value("packages", std::vector<std::string>{});
             for (auto &pkg : preset.packages) pkg = ResolveGamePathString(pkg);
@@ -606,16 +613,20 @@ static void SaveSettings(const App &app) {
         std::vector<std::string> packages;
         packages.reserve(p.packages.size());
         for (const auto &pkg : p.packages) packages.push_back(PortableGamePath(pkg));
+        std::vector<std::string> configs;
+        configs.reserve(p.configs.size());
+        for (const auto &cfg : p.configs) configs.push_back(PortableGamePath(cfg));
         presets.push_back({
             {"name", p.name},
             {"packages", packages},
-            {"autoexec", PortableGamePath(p.autoexec)},
+            {"configs", configs},
             {"extra_args", p.extraArgs},
         });
     }
     json j = {
         {"engine", app.settings.enginePath},
         {"theme", app.settings.theme},
+        {"personal_config", PortableGamePath(app.settings.personalConfig)},
         {"selected_preset", app.selectedPreset},
         {"presets", presets},
     };
@@ -670,7 +681,7 @@ static void SelectBrowserPath(App &app, const fs::path &path) {
         case BrowserTarget::Engine: app.settings.enginePath = value; break;
         case BrowserTarget::QuakeDir: app.settings.quakeDir = value; break;
         case BrowserTarget::Package: preset.packages.push_back(value); app.selectedPackage = static_cast<int>(preset.packages.size()) - 1; break;
-        case BrowserTarget::Autoexec: preset.autoexec = value; break;
+        case BrowserTarget::Autoexec: app.settings.personalConfig = value; break;
         default: break;
     }
     app.browser.open = false;
@@ -714,9 +725,9 @@ static std::string DateStamp() {
 static bool BackupExistingAutoexec(const fs::path &autoexec, const fs::path &marker, std::string &error) {
     std::error_code ec;
     if (!fs::exists(autoexec, ec)) return true;
-    if (fs::exists(marker, ec) && fs::is_symlink(autoexec, ec)) {
+    if (fs::exists(marker, ec)) {
         fs::remove(autoexec, ec);
-        if (ec) { error = "Remove old autoexec symlink failed: " + ec.message(); return false; }
+        if (ec) { error = "Remove old managed autoexec failed: " + ec.message(); return false; }
         return true;
     }
 
@@ -729,6 +740,20 @@ static bool BackupExistingAutoexec(const fs::path &autoexec, const fs::path &mar
     fs::rename(autoexec, backup, ec);
     if (ec) { error = "Backup autoexec failed: " + ec.message(); return false; }
     return true;
+}
+
+static std::string CfgQuote(const std::string &value) {
+    std::string out = "\"";
+    for (char c : value) out += (c == '"') ? "\\\"" : std::string(1, c);
+    out += "\"";
+    return out;
+}
+
+static std::string ExecPathFromBaseq2(const fs::path &source, const fs::path &baseq2Dir) {
+    std::error_code ec;
+    fs::path rel = fs::relative(ExistingAbsolutePath(source), ExistingAbsolutePath(baseq2Dir), ec);
+    if (ec || rel.empty()) rel = ExistingAbsolutePath(source);
+    return rel.generic_string();
 }
 
 static std::vector<std::string> SplitArgs(const std::string &text) {
@@ -776,22 +801,30 @@ static bool PrepareBaseq2Links(const App &app, const Preset &preset, fs::path &b
         name << i << '_' << source.filename().string();
         if (!RecreateSymlink(source, baseq2Dir / name.str(), error)) return false;
     }
-    if (!preset.autoexec.empty()) {
-        fs::path source = ExistingAbsolutePath(preset.autoexec);
-        if (!fs::is_regular_file(source)) { error = "Autoexec missing: " + preset.autoexec; return false; }
-        const fs::path link = baseq2Dir / "autoexec.cfg";
-        const fs::path marker = baseq2Dir / ".q2manager_autoexec";
-        if (!BackupExistingAutoexec(link, marker, error)) return false;
-        if (!RecreateSymlink(source, link, error)) return false;
-        std::ofstream(marker) << source.string() << '\n';
-    } else {
-        const fs::path link = baseq2Dir / "autoexec.cfg";
-        const fs::path marker = baseq2Dir / ".q2manager_autoexec";
-        if (fs::exists(marker, ec) && fs::is_symlink(link, ec)) {
-            fs::remove(link, ec);
-            if (ec) { error = "Remove managed autoexec failed: " + ec.message(); return false; }
-            fs::remove(marker, ec);
+    const bool hasConfigs = !preset.configs.empty() || !app.settings.personalConfig.empty();
+    const fs::path autoexec = baseq2Dir / "autoexec.cfg";
+    const fs::path marker = baseq2Dir / ".q2manager_autoexec";
+    if (hasConfigs) {
+        if (!BackupExistingAutoexec(autoexec, marker, error)) return false;
+        std::ofstream out(autoexec);
+        if (!out) { error = "Write autoexec failed: " + autoexec.string(); return false; }
+        out << "// generated by q2manager\n";
+        for (const auto &cfg : preset.configs) {
+            if (!app.settings.personalConfig.empty() && cfg == app.settings.personalConfig) continue;
+            fs::path source = ExistingAbsolutePath(cfg);
+            if (!fs::is_regular_file(source)) { error = "Config missing: " + cfg; return false; }
+            out << "exec " << CfgQuote(ExecPathFromBaseq2(source, baseq2Dir)) << '\n';
         }
+        if (!app.settings.personalConfig.empty()) {
+            fs::path source = ExistingAbsolutePath(app.settings.personalConfig);
+            if (!fs::is_regular_file(source)) { error = "Personal config missing: " + app.settings.personalConfig; return false; }
+            out << "exec " << CfgQuote(ExecPathFromBaseq2(source, baseq2Dir)) << '\n';
+        }
+        std::ofstream(marker) << "generated\n";
+    } else if (fs::exists(marker, ec)) {
+        fs::remove(autoexec, ec);
+        if (ec) { error = "Remove managed autoexec failed: " + ec.message(); return false; }
+        fs::remove(marker, ec);
     }
     return true;
 }
@@ -860,7 +893,7 @@ static void LaunchPreset(App &app) {
     if (!PrepareBaseq2Links(app, preset, baseq2Dir, error)) { app.status = error; return; }
 
     std::vector<std::string> args = {app.settings.enginePath, "+set", "basedir", app.settings.quakeDir, "+set", "game", "baseq2"};
-    if (!preset.autoexec.empty()) {
+    if (!preset.configs.empty() || !app.settings.personalConfig.empty()) {
         args.push_back("+exec");
         args.push_back("autoexec.cfg");
     }
@@ -1168,16 +1201,21 @@ static void DrawConfigList(App &app, Preset &preset) {
     DrawRectangleRec(list, theme.bgTop);
     const int rowH = 24;
     const int visible = static_cast<int>(list.height) / rowH;
+    std::unordered_map<std::string, int> activeIndexByPath;
+    activeIndexByPath.reserve(preset.configs.size());
+    for (int i = 0; i < static_cast<int>(preset.configs.size()); ++i) {
+        activeIndexByPath.emplace(preset.configs[static_cast<size_t>(i)], i);
+    }
     std::unordered_set<std::string> availablePaths;
     availablePaths.reserve(app.availableConfigs.size());
     for (const auto &cfg : app.availableConfigs) availablePaths.insert(cfg);
 
-    std::vector<std::string> rows;
-    rows.push_back("");
-    for (const auto &cfg : app.availableConfigs) rows.push_back(cfg);
-    if (!preset.autoexec.empty() && !availablePaths.contains(preset.autoexec)) rows.push_back(preset.autoexec);
+    std::vector<std::string> missingConfigs;
+    for (const auto &cfg : preset.configs) {
+        if (!availablePaths.contains(cfg)) missingConfigs.push_back(cfg);
+    }
 
-    const int totalRows = static_cast<int>(rows.size());
+    const int totalRows = static_cast<int>(app.availableConfigs.size() + missingConfigs.size());
     if (!app.confirmUnsavedOpen && CheckCollisionPointRec(GetMousePosition(), list)) {
         app.configScroll += static_cast<int>(-GetMouseWheelMove());
     }
@@ -1201,31 +1239,82 @@ static void DrawConfigList(App &app, Preset &preset) {
     }
 
     int drawn = 0;
-    for (int row = app.configScroll; row < totalRows && drawn < visible; ++row) {
-        const std::string &path = rows[static_cast<size_t>(row)];
-        const bool noneRow = path.empty();
-        const bool missing = !noneRow && !availablePaths.contains(path);
-        const bool selected = (noneRow && preset.autoexec.empty()) || (!noneRow && preset.autoexec == path);
+    int rowIndex = 0;
+    auto drawRow = [&](const std::string &path, bool missing) {
+        if (rowIndex++ < app.configScroll || drawn >= visible) return;
+        const auto activeIt = activeIndexByPath.find(path);
+        const int activeIndex = activeIt == activeIndexByPath.end() ? -1 : activeIt->second;
+        const bool selectedForMove = !app.selectedConfigPath.empty() && app.selectedConfigPath == path;
+        const bool personal = !app.settings.personalConfig.empty() && app.settings.personalConfig == path;
         Rectangle r = {list.x + 8, list.y + 8 + static_cast<float>(drawn * rowH), list.width - 16, 22};
         const bool hover = CheckCollisionPointRec(GetMousePosition(), r);
         if (hover) DrawRectangleRec(r, theme.hover);
-        if (selected) DrawRectangleLinesEx(r, 1, theme.accent2);
+        if (selectedForMove) DrawRectangleLinesEx(r, 1, theme.accent2);
 
-        std::string label = selected ? "> " : "  ";
-        if (noneRow) label += "none";
-        else label += (missing ? "missing: " : "") + DisplayConfigName(path);
-        DrawMonoText(app, label, static_cast<int>(r.x + 6), static_cast<int>(r.y + 3), 14,
+        std::ostringstream label;
+        if (activeIndex >= 0) {
+            if (activeIndex + 1 < 10) label << '0';
+            label << activeIndex + 1 << "  ";
+        } else {
+            label << "    ";
+        }
+        if (personal) label << "P ";
+        else label << "  ";
+        label << (missing ? "missing: " : "") << DisplayConfigName(path);
+        DrawMonoText(app, label.str(), static_cast<int>(r.x + 6), static_cast<int>(r.y + 3), 14,
                      missing ? Color{255, 115, 115, 255} : theme.text);
 
+        if (!app.confirmUnsavedOpen && hover && IsMouseButtonPressed(MOUSE_RIGHT_BUTTON)) {
+            app.selectedConfigPath = path;
+            app.selectedConfig = activeIndex;
+        }
         if (!app.confirmUnsavedOpen && hover && IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
-            preset.autoexec = noneRow ? "" : path;
+            if (activeIndex >= 0) {
+                preset.configs.erase(preset.configs.begin() + activeIndex);
+                app.selectedConfig = -1;
+                app.selectedConfigPath.clear();
+            } else if (!missing) {
+                preset.configs.push_back(path);
+                app.selectedConfig = static_cast<int>(preset.configs.size()) - 1;
+                app.selectedConfigPath = path;
+            }
             SaveSettings(app);
         }
         ++drawn;
-    }
+    };
 
-    DrawAppText(app, "left: select cfg", 660, 238, 12, theme.muted);
-    DrawAppText(app, "top row clears", 660, 256, 12, theme.muted);
+    for (const auto &cfg : app.availableConfigs) drawRow(cfg, false);
+    for (const auto &cfg : missingConfigs) drawRow(cfg, true);
+
+    if (GuiButton({660, 204, 38, 24}, "Up") && app.selectedConfig >= 0) {
+        auto it = std::find(preset.configs.begin(), preset.configs.end(), app.selectedConfigPath);
+        if (it != preset.configs.end()) app.selectedConfig = static_cast<int>(std::distance(preset.configs.begin(), it));
+        if (app.selectedConfig > 0) {
+            std::swap(preset.configs[app.selectedConfig], preset.configs[app.selectedConfig - 1]);
+            --app.selectedConfig;
+            SaveSettings(app);
+        }
+    }
+    if (GuiButton({706, 204, 38, 24}, "Dn") && app.selectedConfig >= 0) {
+        auto it = std::find(preset.configs.begin(), preset.configs.end(), app.selectedConfigPath);
+        if (it != preset.configs.end()) app.selectedConfig = static_cast<int>(std::distance(preset.configs.begin(), it));
+        if (app.selectedConfig + 1 < static_cast<int>(preset.configs.size())) {
+            std::swap(preset.configs[app.selectedConfig], preset.configs[app.selectedConfig + 1]);
+            ++app.selectedConfig;
+            SaveSettings(app);
+        }
+    }
+    if (GuiButton({660, 238, 84, 24}, "Personal") && !app.selectedConfigPath.empty()) {
+        app.settings.personalConfig = app.selectedConfigPath;
+        SaveSettings(app);
+    }
+    if (GuiButton({660, 268, 84, 24}, "Clear Pers")) {
+        app.settings.personalConfig.clear();
+        SaveSettings(app);
+    }
+    DrawAppText(app, "left: toggle", 660, 304, 12, theme.muted);
+    DrawAppText(app, "right: select", 660, 322, 12, theme.muted);
+    DrawAppText(app, "P = personal", 660, 340, 12, theme.muted);
 }
 
 static void DrawMain(App &app) {

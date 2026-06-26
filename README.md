@@ -8,10 +8,10 @@ Small Quake II/q2pro mod preset launcher. UI is raylib + raygui.
 
 - JSON settings in `q2manager.json` next to the q2manager executable
 - Built-in file browser for engine, Quake II directory, packages, and cfg files
-- Presets with ordered `.pak`/`.pkz` package list and one `autoexec.cfg`
+- Presets with ordered `.pak`/`.pkz` package list and ordered `.cfg` fragments
 - Packages are selected from `<q2manager_exe_dir>/.q2manager/paks`
 - Configs are selected from `<q2manager_exe_dir>/.q2manager/configs`
-- Package and autoexec paths inside the game folder are saved relative in JSON
+- Package/config paths inside the game folder are saved relative in JSON
 - Per-launch symlinks are written into `<q2manager_exe_dir>/baseq2`
 - Ordered package symlinks named `q2m_00_name.pkz`, `q2m_01_name.pak`, etc.
 - Built-in procedural keygen-style background music with Play/Pause button, stopped by default
@@ -45,7 +45,7 @@ cmake --build build --config Release
 4. Put selectable `.cfg` files in `<q2manager_exe_dir>/.q2manager/configs`.
 5. Create or select preset.
 6. Use `Packages` tab to activate/deactivate `.pak`/`.pkz` files.
-7. Use `Configs` tab to select optional autoexec config.
+7. Use `Configs` tab to activate/deactivate `.cfg` fragments; optional personal config is executed last.
 8. Press `Launch`.
 
 Launch creates symlinks in:
@@ -58,9 +58,9 @@ Package list order is encoded into symlink names with `q2m_NN_` prefixes, so q2p
 
 Package panel shows every `.pak`/`.pkz` from `.q2manager/paks`. Left-click a row to toggle it for the current preset. Active rows show their load order. Right-click an active row to select it, then use `Up`/`Dn` to reorder.
 
-Configs panel shows every `.cfg` from `.q2manager/configs` recursively. Left-click a config to use it as `autoexec.cfg`, or choose `none` to clear config.
+Configs panel shows every `.cfg` from `.q2manager/configs` recursively. Left-click a config to toggle it for the current preset. Active rows show exec order. Right-click a config to select it, then use `Up`/`Dn` to reorder if active. `Personal` marks selected config as global personal config, executed last for every preset. `Clear Pers` removes it.
 
-If `<q2manager_exe_dir>/baseq2/autoexec.cfg` already exists and was not created by q2manager, it is renamed to a dated backup like `autoexec.cfg.2026-06-24` before q2manager creates its symlink. q2manager tracks its own autoexec symlink with `<q2manager_exe_dir>/baseq2/.q2manager_autoexec`.
+If `<q2manager_exe_dir>/baseq2/autoexec.cfg` already exists and was not created by q2manager, it is renamed to a dated backup like `autoexec.cfg.2026-06-24` before q2manager writes generated autoexec. q2manager tracks its own generated autoexec with `<q2manager_exe_dir>/baseq2/.q2manager_autoexec`.
 
 Then runs:
 
@@ -72,7 +72,6 @@ Windows symlink creation can require Developer Mode or elevated privileges.
 
 ## TODO
 
-- configs handling
 - add better chiptunes music or remove it
 - optionally: mods handling
 - optionally: server browser
