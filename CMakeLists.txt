@@ -52,9 +52,7 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(raylib raygui nlohmann_json)
 
 if (TARGET raylib)
-  if (MSVC)
-    target_compile_options(raylib PRIVATE /w)
-  else()
+  if (NOT MSVC)
     target_compile_options(raylib PRIVATE -w)
   endif()
 endif()

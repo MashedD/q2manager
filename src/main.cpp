@@ -1,5 +1,10 @@
 #include "raylib.h"
 
+#if defined(_MSC_VER)
+#pragma warning(push)
+#pragma warning(disable: 4100 4244 4267 4456 4996)
+#endif
+
 #if defined(__clang__)
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wmissing-field-initializers"
@@ -23,6 +28,10 @@
 #pragma GCC diagnostic pop
 #endif
 
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif
+
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
@@ -43,7 +52,11 @@
 #include <vector>
 
 #ifdef _WIN32
-#include <windows.h>
+#include <handleapi.h>
+#include <libloaderapi.h>
+#include <minwindef.h>
+#include <processthreadsapi.h>
+#include <winbase.h>
 #else
 #include <spawn.h>
 #include <sys/wait.h>
@@ -273,7 +286,7 @@ static void MusicCallback(void *bufferData, unsigned int frames) {
 
 static fs::path ExecutableDir() {
 #ifdef _WIN32
-    std::array<char, MAX_PATH> path{};
+    std::array<char, 32768> path{};
     const DWORD len = GetModuleFileNameA(nullptr, path.data(), static_cast<DWORD>(path.size()));
     if (len > 0) return fs::path(std::string(path.data(), len)).parent_path();
 #else
