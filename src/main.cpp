@@ -887,10 +887,6 @@ static void LaunchPreset(App &app) {
     if (!PrepareBaseq2Links(app, preset, baseq2Dir, error)) { app.status = error; return; }
 
     std::vector<std::string> args = {app.settings.enginePath, "+set", "basedir", app.settings.quakeDir, "+set", "game", "baseq2"};
-    if (!preset.configs.empty()) {
-        args.push_back("+exec");
-        args.push_back("autoexec.cfg");
-    }
     auto extra = SplitArgs(preset.extraArgs);
     args.insert(args.end(), extra.begin(), extra.end());
 
