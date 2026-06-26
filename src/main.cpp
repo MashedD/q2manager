@@ -153,6 +153,8 @@ struct App {
     int selectedPackage = -1;
     int presetScroll = 0;
     int packageScroll = 0;
+    bool draggingPresetScroll = false;
+    bool draggingPackageScroll = false;
     std::vector<std::string> availablePackages;
     std::string scannedPakStore;
     TextField activeText = TextField::None;
@@ -1057,7 +1059,11 @@ static void DrawPackageToggleList(App &app, Preset &preset) {
     const float thumbX = maxScroll > 0 ? scrollTrack.x + (scrollTrack.width - thumbWidth) * static_cast<float>(app.packageScroll) / static_cast<float>(maxScroll) : scrollTrack.x;
     Rectangle scrollThumb = {thumbX, scrollTrack.y + 2, thumbWidth, scrollTrack.height - 4};
     DrawRectangleRec(scrollThumb, theme.accent2);
-    if (!app.confirmUnsavedOpen && maxScroll > 0 && CheckCollisionPointRec(GetMousePosition(), scrollTrack) && IsMouseButtonDown(MOUSE_LEFT_BUTTON)) {
+    if (app.confirmUnsavedOpen || IsMouseButtonReleased(MOUSE_LEFT_BUTTON)) app.draggingPackageScroll = false;
+    if (!app.confirmUnsavedOpen && maxScroll > 0 && CheckCollisionPointRec(GetMousePosition(), scrollTrack) && IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
+        app.draggingPackageScroll = true;
+    }
+    if (app.draggingPackageScroll && maxScroll > 0 && IsMouseButtonDown(MOUSE_LEFT_BUTTON)) {
         const float t = std::clamp((GetMouseX() - scrollTrack.x - thumbWidth * 0.5f) / (scrollTrack.width - thumbWidth), 0.0f, 1.0f);
         app.packageScroll = static_cast<int>(std::round(t * static_cast<float>(maxScroll)));
     }
@@ -1184,7 +1190,11 @@ static void DrawMain(App &app) {
     const float presetThumbX = maxPresetScroll > 0 ? presetTrack.x + (presetTrack.width - presetThumbWidth) * static_cast<float>(app.presetScroll) / static_cast<float>(maxPresetScroll) : presetTrack.x;
     Rectangle presetThumb = {presetThumbX, presetTrack.y + 2, presetThumbWidth, presetTrack.height - 4};
     DrawRectangleRec(presetThumb, theme.accent2);
-    if (!app.confirmUnsavedOpen && maxPresetScroll > 0 && CheckCollisionPointRec(GetMousePosition(), presetTrack) && IsMouseButtonDown(MOUSE_LEFT_BUTTON)) {
+    if (app.confirmUnsavedOpen || IsMouseButtonReleased(MOUSE_LEFT_BUTTON)) app.draggingPresetScroll = false;
+    if (!app.confirmUnsavedOpen && maxPresetScroll > 0 && CheckCollisionPointRec(GetMousePosition(), presetTrack) && IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
+        app.draggingPresetScroll = true;
+    }
+    if (app.draggingPresetScroll && maxPresetScroll > 0 && IsMouseButtonDown(MOUSE_LEFT_BUTTON)) {
         const float t = std::clamp((GetMouseX() - presetTrack.x - presetThumbWidth * 0.5f) / (presetTrack.width - presetThumbWidth), 0.0f, 1.0f);
         app.presetScroll = static_cast<int>(std::round(t * static_cast<float>(maxPresetScroll)));
     }
