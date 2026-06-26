@@ -886,7 +886,7 @@ static void LaunchPreset(App &app) {
     std::string error;
     if (!PrepareBaseq2Links(app, preset, baseq2Dir, error)) { app.status = error; return; }
 
-    std::vector<std::string> args = {app.settings.enginePath, "+set", "basedir", app.settings.quakeDir, "+set", "game", "baseq2"};
+    std::vector<std::string> args = {app.settings.enginePath, "+set", "basedir", app.settings.quakeDir};
     auto extra = SplitArgs(preset.extraArgs);
     args.insert(args.end(), extra.begin(), extra.end());
 
@@ -1319,7 +1319,7 @@ static void DrawMain(App &app) {
     DrawTextInput(app, {118, 106, 520, 26}, app.engineBuf.data(), app.engineBuf.size(), TextField::Engine);
     if (GuiButton({648, 106, 96, 26}, "Browse")) OpenBrowser(app, BrowserTarget::Engine, app.engineBuf.data());
 
-    DrawRectangle(42, 142, 214, 286, theme.panelSoft);
+    DrawRectangle(42, 142, 214, 312, theme.panelSoft);
     DrawAppText(app, "PRESETS", 54, 152, 15, theme.accent);
     const Rectangle presetList = {54, 176, 190, 204};
     const int presetRowH = 26;
