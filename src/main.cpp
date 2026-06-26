@@ -136,6 +136,7 @@ static const ThemePalette &Theme(const App &app);
 enum class BrowserTarget { None, Engine, QuakeDir, Package, Autoexec };
 enum class TextField { None, Engine, PresetName, ExtraArgs };
 enum class PendingAction { None, SwitchPreset, NewPreset, ClonePreset, DeletePreset, MovePresetUp, MovePresetDown, Quit };
+enum class ContentTab { Packages, Configs };
 
 struct Browser {
     bool open = false;
@@ -153,10 +154,15 @@ struct App {
     int selectedPackage = -1;
     int presetScroll = 0;
     int packageScroll = 0;
+    int configScroll = 0;
     bool draggingPresetScroll = false;
     bool draggingPackageScroll = false;
+    bool draggingConfigScroll = false;
     std::vector<std::string> availablePackages;
+    std::vector<std::string> availableConfigs;
     std::string scannedPakStore;
+    std::string scannedConfigStore;
+    ContentTab activeTab = ContentTab::Packages;
     TextField activeText = TextField::None;
     std::array<char, 256> engineBuf{};
     std::array<char, 128> nameBuf{};
@@ -308,6 +314,10 @@ static fs::path PakStoreDir(const std::string &quakeDir) {
     return fs::path(quakeDir) / ".q2manager" / "paks";
 }
 
+static fs::path ConfigStoreDir(const std::string &quakeDir) {
+    return fs::path(quakeDir) / ".q2manager" / "configs";
+}
+
 static fs::path ExistingAbsolutePath(const fs::path &path) {
     std::error_code ec;
     fs::path full = fs::weakly_canonical(fs::absolute(path), ec);
@@ -350,6 +360,12 @@ static std::string DisplayPakName(const fs::path &path) {
     return filename;
 }
 
+static std::string DisplayConfigName(const fs::path &path) {
+    std::string filename = path.filename().string();
+    if (filename.size() >= 4 && filename.substr(filename.size() - 4) == ".cfg") filename.erase(filename.size() - 4);
+    return filename;
+}
+
 static void ScanPakStore(App &app) {
     app.availablePackages.clear();
     const fs::path pakStore = PakStoreDir(app.settings.quakeDir);
@@ -367,6 +383,25 @@ static void ScanPakStore(App &app) {
         return fs::path(a).filename().string() < fs::path(b).filename().string();
     });
     app.packageScroll = 0;
+}
+
+static void ScanConfigStore(App &app) {
+    app.availableConfigs.clear();
+    const fs::path configStore = ConfigStoreDir(app.settings.quakeDir);
+    app.scannedConfigStore = ExistingAbsolutePath(configStore).string();
+    std::error_code ec;
+    fs::create_directories(configStore, ec);
+    if (ec) { app.status = "Create config store failed: " + ec.message(); return; }
+    for (const auto &entry : fs::recursive_directory_iterator(configStore, ec)) {
+        if (entry.is_regular_file(ec) && HasExt(entry.path(), {".cfg"})) {
+            app.availableConfigs.push_back(PathKey(entry.path()));
+        }
+    }
+    if (ec) { app.status = "Scan config store failed: " + ec.message(); return; }
+    std::sort(app.availableConfigs.begin(), app.availableConfigs.end(), [](const std::string &a, const std::string &b) {
+        return fs::path(a).filename().string() < fs::path(b).filename().string();
+    });
+    app.configScroll = 0;
 }
 
 static void EnsurePreset(App &app) {
@@ -1022,7 +1057,6 @@ static void DrawPackageToggleList(App &app, Preset &preset) {
     const std::string currentStore = ExistingAbsolutePath(pakStore).string();
     if (app.scannedPakStore != currentStore) ScanPakStore(app);
 
-    DrawAppText(app, "PACKAGES", 276, 184, 15, theme.accent);
     if (GuiButton({574, 180, 74, 22}, "Refresh")) ScanPakStore(app);
 
     Rectangle list = {276, 204, 372, 202};
@@ -1121,6 +1155,77 @@ static void DrawPackageToggleList(App &app, Preset &preset) {
     }
     DrawAppText(app, "left: toggle", 660, 238, 12, theme.muted);
     DrawAppText(app, "right: select", 660, 256, 12, theme.muted);
+}
+
+static void DrawConfigList(App &app, Preset &preset) {
+    const auto &theme = Theme(app);
+    const fs::path configStore = ConfigStoreDir(app.settings.quakeDir);
+    const std::string currentStore = ExistingAbsolutePath(configStore).string();
+    if (app.scannedConfigStore != currentStore) ScanConfigStore(app);
+    if (GuiButton({574, 180, 74, 22}, "Refresh")) ScanConfigStore(app);
+
+    Rectangle list = {276, 204, 372, 202};
+    DrawRectangleRec(list, theme.bgTop);
+    const int rowH = 24;
+    const int visible = static_cast<int>(list.height) / rowH;
+    std::unordered_set<std::string> availablePaths;
+    availablePaths.reserve(app.availableConfigs.size());
+    for (const auto &cfg : app.availableConfigs) availablePaths.insert(cfg);
+
+    std::vector<std::string> rows;
+    rows.push_back("");
+    for (const auto &cfg : app.availableConfigs) rows.push_back(cfg);
+    if (!preset.autoexec.empty() && !availablePaths.contains(preset.autoexec)) rows.push_back(preset.autoexec);
+
+    const int totalRows = static_cast<int>(rows.size());
+    if (!app.confirmUnsavedOpen && CheckCollisionPointRec(GetMousePosition(), list)) {
+        app.configScroll += static_cast<int>(-GetMouseWheelMove());
+    }
+    app.configScroll = std::clamp(app.configScroll, 0, std::max(0, totalRows - visible));
+
+    const int maxScroll = std::max(0, totalRows - visible);
+    Rectangle scrollTrack = {276, 410, 372, 12};
+    DrawRectangleRec(scrollTrack, theme.panelSoft);
+    DrawRectangleLinesEx(scrollTrack, 1, theme.border);
+    const float thumbWidth = maxScroll > 0 ? std::max(42.0f, scrollTrack.width * static_cast<float>(visible) / static_cast<float>(totalRows)) : scrollTrack.width;
+    const float thumbX = maxScroll > 0 ? scrollTrack.x + (scrollTrack.width - thumbWidth) * static_cast<float>(app.configScroll) / static_cast<float>(maxScroll) : scrollTrack.x;
+    Rectangle scrollThumb = {thumbX, scrollTrack.y + 2, thumbWidth, scrollTrack.height - 4};
+    DrawRectangleRec(scrollThumb, theme.accent2);
+    if (app.confirmUnsavedOpen || IsMouseButtonReleased(MOUSE_LEFT_BUTTON)) app.draggingConfigScroll = false;
+    if (!app.confirmUnsavedOpen && maxScroll > 0 && CheckCollisionPointRec(GetMousePosition(), scrollTrack) && IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
+        app.draggingConfigScroll = true;
+    }
+    if (app.draggingConfigScroll && maxScroll > 0 && IsMouseButtonDown(MOUSE_LEFT_BUTTON)) {
+        const float t = std::clamp((GetMouseX() - scrollTrack.x - thumbWidth * 0.5f) / (scrollTrack.width - thumbWidth), 0.0f, 1.0f);
+        app.configScroll = static_cast<int>(std::round(t * static_cast<float>(maxScroll)));
+    }
+
+    int drawn = 0;
+    for (int row = app.configScroll; row < totalRows && drawn < visible; ++row) {
+        const std::string &path = rows[static_cast<size_t>(row)];
+        const bool noneRow = path.empty();
+        const bool missing = !noneRow && !availablePaths.contains(path);
+        const bool selected = (noneRow && preset.autoexec.empty()) || (!noneRow && preset.autoexec == path);
+        Rectangle r = {list.x + 8, list.y + 8 + static_cast<float>(drawn * rowH), list.width - 16, 22};
+        const bool hover = CheckCollisionPointRec(GetMousePosition(), r);
+        if (hover) DrawRectangleRec(r, theme.hover);
+        if (selected) DrawRectangleLinesEx(r, 1, theme.accent2);
+
+        std::string label = selected ? "> " : "  ";
+        if (noneRow) label += "none";
+        else label += (missing ? "missing: " : "") + DisplayConfigName(path);
+        DrawMonoText(app, label, static_cast<int>(r.x + 6), static_cast<int>(r.y + 3), 14,
+                     missing ? Color{255, 115, 115, 255} : theme.text);
+
+        if (!app.confirmUnsavedOpen && hover && IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
+            preset.autoexec = noneRow ? "" : path;
+            SaveSettings(app);
+        }
+        ++drawn;
+    }
+
+    DrawAppText(app, "left: select cfg", 660, 238, 12, theme.muted);
+    DrawAppText(app, "top row clears", 660, 256, 12, theme.muted);
 }
 
 static void DrawMain(App &app) {
@@ -1226,16 +1331,34 @@ static void DrawMain(App &app) {
         app.status = "Saved q2manager.json";
     }
 
-    DrawPackageToggleList(app, preset);
+    const bool packageTab = app.activeTab == ContentTab::Packages;
+    const int oldBase = GuiGetStyle(DEFAULT, BASE_COLOR_NORMAL);
+    const int oldText = GuiGetStyle(DEFAULT, TEXT_COLOR_NORMAL);
+    if (packageTab) {
+        GuiSetStyle(DEFAULT, BASE_COLOR_NORMAL, ColorToInt(theme.accent2));
+        GuiSetStyle(DEFAULT, TEXT_COLOR_NORMAL, ColorToInt(theme.bgBottom));
+    }
+    if (GuiButton({276, 180, 110, 22}, "Packages")) app.activeTab = ContentTab::Packages;
+    if (packageTab) {
+        GuiSetStyle(DEFAULT, BASE_COLOR_NORMAL, oldBase);
+        GuiSetStyle(DEFAULT, TEXT_COLOR_NORMAL, oldText);
+    }
+    if (!packageTab) {
+        GuiSetStyle(DEFAULT, BASE_COLOR_NORMAL, ColorToInt(theme.accent2));
+        GuiSetStyle(DEFAULT, TEXT_COLOR_NORMAL, ColorToInt(theme.bgBottom));
+    }
+    if (GuiButton({392, 180, 110, 22}, "Configs")) app.activeTab = ContentTab::Configs;
+    if (!packageTab) {
+        GuiSetStyle(DEFAULT, BASE_COLOR_NORMAL, oldBase);
+        GuiSetStyle(DEFAULT, TEXT_COLOR_NORMAL, oldText);
+    }
 
-    GuiLabel({276, 426, 80, 22}, "Autoexec");
-    const std::string cfg = preset.autoexec.empty() ? "(none)" : fs::path(preset.autoexec).filename().string();
-    DrawAppText(app, cfg, 354, 430, 14, theme.text);
-    if (GuiButton({660, 422, 84, 24}, "Choose")) OpenBrowser(app, BrowserTarget::Autoexec, app.settings.quakeDir);
+    if (app.activeTab == ContentTab::Packages) DrawPackageToggleList(app, preset);
+    else DrawConfigList(app, preset);
 
-    GuiLabel({276, 462, 80, 22}, "Extra Args");
-    DrawTextInput(app, {354, 460, 290, 26}, app.argsBuf.data(), app.argsBuf.size(), TextField::ExtraArgs);
-    if (GuiButton({660, 460, 84, 32}, "Launch")) LaunchPreset(app);
+    GuiLabel({276, 426, 80, 22}, "Extra Args");
+    DrawTextInput(app, {354, 424, 290, 26}, app.argsBuf.data(), app.argsBuf.size(), TextField::ExtraArgs);
+    if (GuiButton({660, 424, 84, 32}, "Launch")) LaunchPreset(app);
 
     DrawRectangle(24, 520, 752, 28, theme.status);
     DrawAppText(app, app.status, 34, 527, 14, theme.text);
