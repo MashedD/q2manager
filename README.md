@@ -45,7 +45,7 @@ cmake --build build --config Release
 4. Put selectable `.cfg` files in `<q2manager_exe_dir>/.q2manager/configs`.
 5. Create or select preset.
 6. Use `Packages` tab to activate/deactivate `.pak`/`.pkz` files.
-7. Use `Configs` tab to activate/deactivate `.cfg` fragments; optional personal config is executed last.
+7. Use `Configs` tab to activate/deactivate `.cfg` fragments.
 8. Press `Launch`.
 
 Launch creates symlinks in:
@@ -58,9 +58,9 @@ Package list order is encoded into symlink names with `q2m_pak_NN_` prefixes, so
 
 Package panel shows every `.pak`/`.pkz` from `.q2manager/paks`. Left-click a row to toggle it for the current preset. Active rows show their load order. Right-click an active row to select it, then use `Up`/`Dn` to reorder.
 
-Configs panel shows every `.cfg` from `.q2manager/configs` recursively. Left-click a config to toggle it for the current preset. Active rows show exec order. Right-click a config to select it, then use `Up`/`Dn` to reorder if active. `Personal` marks selected config as global personal config, executed last for every preset. `Clear Pers` removes it.
+Configs panel shows every `.cfg` from `.q2manager/configs` recursively. Left-click a config to toggle it for the current preset. Active rows show exec order. Right-click a config to select it, then use `Up`/`Dn` to reorder if active.
 
-Selected configs are symlinked into `baseq2` as `q2m_cfg_NN_name.cfg`, and personal config as `q2m_personal_name.cfg`. Generated `autoexec.cfg` only execs those local names because q2pro does not load `..` paths from `baseq2`.
+Selected configs are symlinked into `baseq2` as `q2m_cfg_NN_name.cfg`. Generated `autoexec.cfg` only execs those local names because q2pro does not load `..` paths from `baseq2`.
 
 If `<q2manager_exe_dir>/baseq2/autoexec.cfg` already exists and was not created by q2manager, it is renamed to a dated backup like `autoexec.cfg.2026-06-24` before q2manager writes generated autoexec. q2manager tracks its own generated autoexec with `<q2manager_exe_dir>/baseq2/.q2manager_autoexec`.
 
