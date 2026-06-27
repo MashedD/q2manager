@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#181026"/>
+      <stop offset="0.55" stop-color="#07111a"/>
+      <stop offset="1" stop-color="#020509"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3c2556"/>
+      <stop offset="1" stop-color="#101522"/>
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="5" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <rect x="8" y="8" width="240" height="240" rx="28" fill="url(#bg)"/>
+  <rect x="14" y="14" width="228" height="228" rx="24" fill="none" stroke="#ff5cd6" stroke-width="4"/>
+  <rect x="22" y="22" width="212" height="212" rx="18" fill="none" stroke="#71faff" stroke-width="2" opacity="0.7"/>
+
+  <g opacity="0.25">
+    <path d="M28 64h200M28 96h200M28 128h200M28 160h200M28 192h200" stroke="#ffffff" stroke-width="2"/>
+  </g>
+
+  <circle cx="128" cy="128" r="76" fill="none" stroke="#71faff" stroke-width="5" opacity="0.95" filter="url(#glow)"/>
+  <circle cx="128" cy="128" r="50" fill="none" stroke="#ff5cd6" stroke-width="3" opacity="0.85"/>
+  <path d="M128 38v40M128 178v40M38 128h40M178 128h40" stroke="#71faff" stroke-width="5" stroke-linecap="round" filter="url(#glow)"/>
+
+  <g transform="translate(46 67)">
+    <rect x="0" y="0" width="164" height="116" rx="12" fill="url(#panel)" stroke="#71faff" stroke-width="4"/>
+    <rect x="11" y="12" width="142" height="92" rx="6" fill="#090b12" stroke="#ff5cd6" stroke-width="2"/>
+    <path d="M22 82h120" stroke="#71faff" stroke-width="4" opacity="0.8"/>
+    <path d="M22 93h86" stroke="#ff5cd6" stroke-width="4" opacity="0.8"/>
+  </g>
+
+  <text x="128" y="135" text-anchor="middle" font-family="DejaVu Sans Mono, Consolas, monospace" font-size="70" font-weight="900" fill="#d8f7ff" stroke="#07111a" stroke-width="5" paint-order="stroke" filter="url(#glow)">Q2</text>
+  <text x="128" y="170" text-anchor="middle" font-family="DejaVu Sans Mono, Consolas, monospace" font-size="22" font-weight="700" fill="#ff5cd6">PAK</text>
+</svg>

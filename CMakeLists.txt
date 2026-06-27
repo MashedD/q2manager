@@ -32,6 +32,8 @@ FetchContent_Declare(
   raylib
   GIT_REPOSITORY https://github.com/raysan5/raylib.git
   GIT_TAG 5.5
+  GIT_SHALLOW TRUE
+  GIT_PROGRESS TRUE
 )
 set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(BUILD_GAMES OFF CACHE BOOL "" FORCE)
@@ -41,12 +43,16 @@ FetchContent_Declare(
   raygui
   GIT_REPOSITORY https://github.com/raysan5/raygui.git
   GIT_TAG 4.0
+  GIT_SHALLOW TRUE
+  GIT_PROGRESS TRUE
 )
 
 FetchContent_Declare(
   nlohmann_json
   GIT_REPOSITORY https://github.com/nlohmann/json.git
   GIT_TAG v3.11.3
+  GIT_SHALLOW TRUE
+  GIT_PROGRESS TRUE
 )
 
 FetchContent_MakeAvailable(raylib raygui nlohmann_json)
@@ -57,8 +63,13 @@ if (TARGET raylib)
   endif()
 endif()
 
+set(Q2MANAGER_SOURCES src/main.cpp)
+if (WIN32)
+  list(APPEND Q2MANAGER_SOURCES q2manager.rc)
+endif()
+
 add_executable(q2manager
-  src/main.cpp
+  ${Q2MANAGER_SOURCES}
 )
 
 target_include_directories(q2manager PRIVATE
@@ -68,6 +79,12 @@ target_include_directories(q2manager PRIVATE
 target_link_libraries(q2manager PRIVATE raylib nlohmann_json::nlohmann_json)
 
 target_compile_definitions(q2manager PRIVATE Q2MANAGER_VERSION="${Q2MANAGER_VERSION_STRING}")
+
+add_custom_command(TARGET q2manager POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy_directory
+          ${CMAKE_CURRENT_SOURCE_DIR}/assets
+          $<TARGET_FILE_DIR:q2manager>/assets
+)
 
 if (WIN32)
   target_compile_definitions(q2manager PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)

@@ -16,6 +16,7 @@ Small Quake II/q2pro mod preset launcher. UI is raylib + raygui.
 - Ordered package symlinks named `q2m_pak_00_name.pkz`, `q2m_pak_01_name.pak`, etc.
 - Built-in procedural keygen-style background music with Play/Pause button, stopped by default
 - Theme buttons: Cyber and Matrix neon-green
+- Cyber-style app icon in `assets/icon.png`/`.ico`/`.svg`
 - Direct q2pro launch on Linux and Windows
 
 ## Notes
@@ -37,10 +38,20 @@ cmake -S . -B build
 cmake --build build --config Release
 ```
 
+## Linux Desktop Entry
+
+Use `q2manager.desktop.example` as a template. Replace `/ABSOLUTE/PATH/TO/QUAKE2` with your real Quake II directory, then copy it to:
+
+```text
+~/.local/share/applications/q2manager.desktop
+```
+
+`Exec` should point to the real q2manager executable inside the Quake II folder. Do not point it at a symlink, because q2manager uses its executable directory as the game directory.
+
 ## Use
 
 1. Put q2manager executable in your Quake II directory.
-2. Set `Engine` to `q2pro`/`q2pro.exe`.
+2. Set `Engine` to `q2pro`/`q2pro.exe`; relative paths are resolved from q2manager executable directory.
 3. Put selectable `.pak`/`.pkz` files in `<q2manager_exe_dir>/.q2manager/paks`.
 4. Put selectable `.cfg` files in `<q2manager_exe_dir>/.q2manager/configs`.
 5. Create or select preset.

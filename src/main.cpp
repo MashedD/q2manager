@@ -58,11 +58,8 @@
 #include <processthreadsapi.h>
 #include <winbase.h>
 #else
-#include <spawn.h>
-#include <sys/wait.h>
 #include <unistd.h>
 #include <limits.h>
-extern char **environ;
 #endif
 
 namespace fs = std::filesystem;
@@ -368,6 +365,22 @@ static std::string ResolveGamePathString(const std::string &value) {
     return ResolveGamePath(value).generic_string();
 }
 
+static fs::path ResolveEnginePath(const std::string &enginePath) {
+    fs::path path(enginePath);
+    if (path.empty()) return path;
+    if (path.is_absolute()) return ExistingAbsolutePath(path);
+    if (path.has_parent_path()) return ExistingAbsolutePath(ExecutableDir() / path);
+
+    const fs::path local = ExistingAbsolutePath(ExecutableDir() / path);
+    if (fs::is_regular_file(local)) return local;
+    return path;
+}
+
+static bool EnginePathNeedsExistingFile(const std::string &enginePath, const fs::path &resolvedEngine) {
+    const fs::path original(enginePath);
+    return original.is_absolute() || original.has_parent_path() || resolvedEngine.has_parent_path();
+}
+
 static std::string DisplayPakName(const fs::path &path) {
     std::string filename = path.filename().string();
     if (filename.rfind("q2dl-", 0) == 0) filename.erase(0, 5);
@@ -481,6 +494,16 @@ static void LoadReadableFont(App &app) {
         return;
     }
     app.font = GetFontDefault();
+}
+
+static void LoadAppIcon() {
+    const fs::path iconPath = ExecutableDir() / "assets" / "icon.png";
+    if (!fs::is_regular_file(iconPath)) return;
+    Image icon = LoadImage(iconPath.string().c_str());
+    if (icon.data) {
+        SetWindowIcon(icon);
+        UnloadImage(icon);
+    }
 }
 
 static void LoadMonospaceFont(App &app) {
@@ -869,20 +892,13 @@ static bool LaunchProcess(const std::vector<std::string> &args, const fs::path &
     argv.reserve(args.size() + 1);
     for (const auto &arg : args) argv.push_back(const_cast<char *>(arg.c_str()));
     argv.push_back(nullptr);
-    pid_t pid = 0;
-    posix_spawn_file_actions_t actions;
-    posix_spawn_file_actions_init(&actions);
-    posix_spawnattr_t attr;
-    posix_spawnattr_init(&attr);
-    const fs::path old = fs::current_path();
-    std::error_code ec;
-    fs::current_path(cwd, ec);
-    if (ec) { error = "chdir failed: " + ec.message(); return false; }
-    const int rc = posix_spawn(&pid, args[0].c_str(), &actions, &attr, argv.data(), environ);
-    fs::current_path(old, ec);
-    posix_spawn_file_actions_destroy(&actions);
-    posix_spawnattr_destroy(&attr);
-    if (rc != 0) { error = "posix_spawn failed: " + std::to_string(rc); return false; }
+    const pid_t pid = fork();
+    if (pid < 0) { error = "fork failed"; return false; }
+    if (pid == 0) {
+        if (chdir(cwd.string().c_str()) != 0) _exit(126);
+        execvp(argv[0], argv.data());
+        _exit(127);
+    }
     return true;
 #endif
 }
@@ -899,11 +915,12 @@ static void LaunchPreset(App &app) {
     std::string error;
     if (!PrepareBaseq2Links(app, preset, baseq2Dir, error)) { app.status = error; return; }
 
-    std::vector<std::string> args = {app.settings.enginePath, "+set", "basedir", app.settings.quakeDir};
+    const fs::path engine = ResolveEnginePath(app.settings.enginePath);
+    std::vector<std::string> args = {engine.string(), "+set", "basedir", app.settings.quakeDir};
     auto extra = SplitArgs(preset.extraArgs);
     args.insert(args.end(), extra.begin(), extra.end());
 
-    if (!fs::is_regular_file(app.settings.enginePath)) { app.status = "Engine path invalid"; return; }
+    if (EnginePathNeedsExistingFile(app.settings.enginePath, engine) && !fs::is_regular_file(engine)) { app.status = "Engine path invalid: " + engine.string(); return; }
     if (!LaunchProcess(args, app.settings.quakeDir, error)) { app.status = error; return; }
     app.status = "Launched " + preset.name + " using " + baseq2Dir.string();
 }
@@ -1453,6 +1470,7 @@ int main() {
     SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_VSYNC_HINT);
     const std::string windowTitle = std::string("q2manager ") + Q2MANAGER_VERSION;
     InitWindow(800, 560, windowTitle.c_str());
+    LoadAppIcon();
     SetTargetFPS(60);
     InitMusic(app);
     LoadReadableFont(app);

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=q2manager
+Comment=Quake II q2pro mod preset manager
+Exec=/ABSOLUTE/PATH/TO/QUAKE2/q2manager
+Icon=/ABSOLUTE/PATH/TO/QUAKE2/assets/icon.png
+Terminal=false
+Categories=Game;
+StartupNotify=false
