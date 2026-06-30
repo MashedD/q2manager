@@ -120,6 +120,9 @@ struct ThemePalette {
     uint32_t guiBorder;
     uint32_t guiBorderFocus;
     uint32_t guiBorderPressed;
+    uint32_t guiTextDisabled;
+    uint32_t guiBaseDisabled;
+    uint32_t guiBorderDisabled;
 };
 
 struct App;
@@ -131,6 +134,7 @@ static const ThemePalette kThemes[] = {
         Color{113, 250, 255, 255}, Color{255, 92, 214, 255}, Color{101, 233, 255, 255}, Color{58, 37, 77, 255},
         Color{220, 245, 255, 255}, Color{180, 220, 230, 255},
         0xffd8f7ff, 0xffffffff, 0x30243dff, 0x241831ff, 0x161020ff, 0x65e9ffff, 0xff55d8ff, 0x70f4ffff,
+        0x7c8794ff, 0x191522ff, 0x3a314aff,
     },
     {
         "matrix", "Matrix",
@@ -138,6 +142,7 @@ static const ThemePalette kThemes[] = {
         Color{76, 255, 96, 255}, Color{0, 180, 70, 255}, Color{40, 240, 80, 255}, Color{12, 70, 24, 255},
         Color{205, 255, 210, 255}, Color{120, 210, 135, 255},
         0xffcfffda, 0xffffffff, 0x08250fff, 0x0b3a16ff, 0x031807ff, 0x28f050ff, 0x4cff60ff, 0xaaffb4ff,
+        0x557a5cff, 0x061208ff, 0x16481fff,
     },
 };
 
@@ -145,7 +150,7 @@ static const ThemePalette &Theme(const App &app);
 
 enum class BrowserTarget { None, Engine, QuakeDir, Package, Autoexec };
 enum class TextField { None, Engine, PresetName, ExtraArgs };
-enum class PendingAction { None, SwitchPreset, NewPreset, ClonePreset, DeletePreset, MovePresetUp, MovePresetDown, Quit };
+enum class PendingAction { None, SwitchPreset, NewPreset, ClonePreset, DeletePreset, MovePresetUp, MovePresetDown, DisableEdit, Quit };
 enum class ContentTab { Packages, Configs };
 
 struct Browser {
@@ -181,6 +186,7 @@ struct App {
     std::array<char, 512> argsBuf{};
     std::string status = "Set engine and Quake dir, create preset, launch.";
     bool quitRequested = false;
+    bool editEnabled = false;
     bool confirmUnsavedOpen = false;
     PendingAction pendingAction = PendingAction::None;
     int pendingPresetIndex = 0;
@@ -198,6 +204,10 @@ static const ThemePalette &Theme(const App &app) {
         if (app.settings.theme == theme.id) return theme;
     }
     return kThemes[0];
+}
+
+static bool CanEdit(const App &app) {
+    return app.editEnabled && !app.confirmUnsavedOpen;
 }
 
 static float Square(float phase) {
@@ -702,6 +712,10 @@ static bool AcceptsTarget(BrowserTarget target, const fs::path &path) {
 }
 
 static void SelectBrowserPath(App &app, const fs::path &path) {
+    if (!CanEdit(app)) {
+        app.status = "Enable Edit to change paths.";
+        return;
+    }
     if (!AcceptsTarget(app.browser.target, path)) return;
     if (app.browser.target == BrowserTarget::Package && !IsInsideDir(path, PakStoreDir(app.settings.quakeDir))) {
         app.status = "Packages must be in " + PakStoreDir(app.settings.quakeDir).string();
@@ -987,6 +1001,10 @@ static void ExecutePendingAction(App &app) {
                 SaveSettings(app);
             }
             break;
+        case PendingAction::DisableEdit:
+            app.editEnabled = false;
+            app.activeText = TextField::None;
+            break;
         case PendingAction::Quit:
             app.quitRequested = true;
             break;
@@ -1061,6 +1079,9 @@ static void ApplyStyle(const App &app) {
     GuiSetStyle(DEFAULT, BORDER_COLOR_NORMAL, static_cast<int>(theme.guiBorder));
     GuiSetStyle(DEFAULT, BORDER_COLOR_FOCUSED, static_cast<int>(theme.guiBorderFocus));
     GuiSetStyle(DEFAULT, BORDER_COLOR_PRESSED, static_cast<int>(theme.guiBorderPressed));
+    GuiSetStyle(DEFAULT, TEXT_COLOR_DISABLED, static_cast<int>(theme.guiTextDisabled));
+    GuiSetStyle(DEFAULT, BASE_COLOR_DISABLED, static_cast<int>(theme.guiBaseDisabled));
+    GuiSetStyle(DEFAULT, BORDER_COLOR_DISABLED, static_cast<int>(theme.guiBorderDisabled));
 }
 
 static void DrawBrowser(App &app) {
@@ -1099,9 +1120,23 @@ static void DrawBrowser(App &app) {
 }
 
 static void DrawTextInput(App &app, Rectangle bounds, char *text, int textSize, TextField field) {
-    if (GuiTextBox(bounds, text, textSize, app.activeText == field)) {
+    if (!CanEdit(app)) {
+        GuiTextBox(bounds, text, textSize, false);
+        return;
+    }
+    if (GuiTextBox(bounds, text, textSize, CanEdit(app) && app.activeText == field)) {
         app.activeText = (app.activeText == field) ? TextField::None : field;
     }
+}
+
+static bool EditButton(App &app, Rectangle bounds, const char *text) {
+    if (!CanEdit(app)) {
+        GuiDisable();
+        GuiButton(bounds, text);
+        GuiEnable();
+        return false;
+    }
+    return GuiButton(bounds, text);
 }
 
 static void DrawPackageToggleList(App &app, Preset &preset) {
@@ -1177,10 +1212,10 @@ static void DrawPackageToggleList(App &app, Preset &preset) {
         DrawMonoText(app, label.str(), static_cast<int>(r.x + 6), static_cast<int>(r.y + 3), 14,
                      missing ? Color{255, 115, 115, 255} : theme.text);
 
-        if (!app.confirmUnsavedOpen && hover && IsMouseButtonPressed(MOUSE_RIGHT_BUTTON) && activeIndex >= 0) {
+        if (CanEdit(app) && hover && IsMouseButtonPressed(MOUSE_RIGHT_BUTTON) && activeIndex >= 0) {
             app.selectedPackage = activeIndex;
         }
-        if (!app.confirmUnsavedOpen && hover && IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
+        if (CanEdit(app) && hover && IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
             if (activeIndex >= 0) {
                 preset.packages.erase(preset.packages.begin() + activeIndex);
                 app.selectedPackage = -1;
@@ -1196,12 +1231,12 @@ static void DrawPackageToggleList(App &app, Preset &preset) {
     for (const auto &pkg : app.availablePackages) drawRow(pkg, false);
     for (const auto &pkg : missingPackages) drawRow(pkg, true);
 
-    if (GuiButton({660, 204, 38, 24}, "Up") && app.selectedPackage > 0) {
+    if (EditButton(app, {660, 204, 38, 24}, "Up") && app.selectedPackage > 0) {
         std::swap(preset.packages[app.selectedPackage], preset.packages[app.selectedPackage - 1]);
         --app.selectedPackage;
         SaveSettings(app);
     }
-    if (GuiButton({706, 204, 38, 24}, "Dn") && app.selectedPackage >= 0 && app.selectedPackage + 1 < static_cast<int>(preset.packages.size())) {
+    if (EditButton(app, {706, 204, 38, 24}, "Dn") && app.selectedPackage >= 0 && app.selectedPackage + 1 < static_cast<int>(preset.packages.size())) {
         std::swap(preset.packages[app.selectedPackage], preset.packages[app.selectedPackage + 1]);
         ++app.selectedPackage;
         SaveSettings(app);
@@ -1282,11 +1317,11 @@ static void DrawConfigList(App &app, Preset &preset) {
         DrawMonoText(app, label.str(), static_cast<int>(r.x + 6), static_cast<int>(r.y + 3), 14,
                      missing ? Color{255, 115, 115, 255} : theme.text);
 
-        if (!app.confirmUnsavedOpen && hover && IsMouseButtonPressed(MOUSE_RIGHT_BUTTON)) {
+        if (CanEdit(app) && hover && IsMouseButtonPressed(MOUSE_RIGHT_BUTTON)) {
             app.selectedConfigPath = path;
             app.selectedConfig = activeIndex;
         }
-        if (!app.confirmUnsavedOpen && hover && IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
+        if (CanEdit(app) && hover && IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
             if (activeIndex >= 0) {
                 preset.configs.erase(preset.configs.begin() + activeIndex);
                 app.selectedConfig = -1;
@@ -1304,7 +1339,7 @@ static void DrawConfigList(App &app, Preset &preset) {
     for (const auto &cfg : app.availableConfigs) drawRow(cfg, false);
     for (const auto &cfg : missingConfigs) drawRow(cfg, true);
 
-    if (GuiButton({660, 204, 38, 24}, "Up") && app.selectedConfig >= 0) {
+    if (EditButton(app, {660, 204, 38, 24}, "Up") && app.selectedConfig >= 0) {
         auto it = std::find(preset.configs.begin(), preset.configs.end(), app.selectedConfigPath);
         if (it != preset.configs.end()) app.selectedConfig = static_cast<int>(std::distance(preset.configs.begin(), it));
         if (app.selectedConfig > 0) {
@@ -1313,7 +1348,7 @@ static void DrawConfigList(App &app, Preset &preset) {
             SaveSettings(app);
         }
     }
-    if (GuiButton({706, 204, 38, 24}, "Dn") && app.selectedConfig >= 0) {
+    if (EditButton(app, {706, 204, 38, 24}, "Dn") && app.selectedConfig >= 0) {
         auto it = std::find(preset.configs.begin(), preset.configs.end(), app.selectedConfigPath);
         if (it != preset.configs.end()) app.selectedConfig = static_cast<int>(std::distance(preset.configs.begin(), it));
         if (app.selectedConfig + 1 < static_cast<int>(preset.configs.size())) {
@@ -1331,6 +1366,15 @@ static void DrawMain(App &app) {
     DrawBackground(app);
     if (GuiButton({744, 18, 34, 28}, "X")) RequestAction(app, PendingAction::Quit);
     if (GuiButton({676, 18, 58, 28}, app.musicPlaying ? "Pause" : "Play")) ToggleMusic(app);
+    bool editChecked = app.editEnabled;
+    GuiCheckBox({420, 23, 18, 18}, "Edit", &editChecked);
+    if (editChecked != app.editEnabled) {
+        if (editChecked) {
+            app.editEnabled = true;
+        } else {
+            RequestAction(app, PendingAction::DisableEdit);
+        }
+    }
     if (GuiButton({506, 18, 78, 28}, "Cyber")) {
         app.settings.theme = "cyber";
         ApplyStyle(app);
@@ -1347,7 +1391,7 @@ static void DrawMain(App &app) {
 
     GuiLabel({42, 108, 80, 22}, "Engine");
     DrawTextInput(app, {118, 106, 520, 26}, app.engineBuf.data(), app.engineBuf.size(), TextField::Engine);
-    if (GuiButton({648, 106, 96, 26}, "Browse")) OpenBrowser(app, BrowserTarget::Engine, app.engineBuf.data());
+    if (EditButton(app, {648, 106, 96, 26}, "Browse")) OpenBrowser(app, BrowserTarget::Engine, app.engineBuf.data());
 
     DrawRectangle(42, 142, 214, 312, theme.panelSoft);
     DrawAppText(app, "PRESETS", 54, 152, 15, theme.accent);
@@ -1401,26 +1445,26 @@ static void DrawMain(App &app) {
         const float t = std::clamp((GetMouseX() - presetTrack.x - presetThumbWidth * 0.5f) / (presetTrack.width - presetThumbWidth), 0.0f, 1.0f);
         app.presetScroll = static_cast<int>(std::round(t * static_cast<float>(maxPresetScroll)));
     }
-    if (GuiButton({54, 390, 58, 24}, "New")) {
+    if (EditButton(app, {54, 390, 58, 24}, "New")) {
         RequestAction(app, PendingAction::NewPreset);
     }
-    if (GuiButton({120, 390, 58, 24}, "Clone")) {
+    if (EditButton(app, {120, 390, 58, 24}, "Clone")) {
         RequestAction(app, PendingAction::ClonePreset);
     }
-    if (GuiButton({186, 390, 58, 24}, "Del") && app.settings.presets.size() > 1) {
+    if (EditButton(app, {186, 390, 58, 24}, "Del") && app.settings.presets.size() > 1) {
         RequestAction(app, PendingAction::DeletePreset);
     }
-    if (GuiButton({120, 420, 58, 24}, "Up") && app.selectedPreset > 0) {
+    if (EditButton(app, {120, 420, 58, 24}, "Up") && app.selectedPreset > 0) {
         RequestAction(app, PendingAction::MovePresetUp);
     }
-    if (GuiButton({186, 420, 58, 24}, "Dn") && app.selectedPreset + 1 < static_cast<int>(app.settings.presets.size())) {
+    if (EditButton(app, {186, 420, 58, 24}, "Dn") && app.selectedPreset + 1 < static_cast<int>(app.settings.presets.size())) {
         RequestAction(app, PendingAction::MovePresetDown);
     }
 
     Preset &preset = CurrentPreset(app);
     GuiLabel({276, 146, 90, 22}, "Name");
     DrawTextInput(app, {340, 144, 240, 26}, app.nameBuf.data(), app.nameBuf.size(), TextField::PresetName);
-    if (GuiButton({594, 144, 82, 26}, "Save")) {
+    if (EditButton(app, {594, 144, 82, 26}, "Save")) {
         app.settings.enginePath = app.engineBuf.data();
         app.settings.quakeDir = ExecutableDir().string();
         preset.name = app.nameBuf.data();

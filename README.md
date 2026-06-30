@@ -17,6 +17,7 @@ Small Quake II/q2pro mod preset launcher. UI is raylib + raygui.
 - Built-in procedural keygen-style background music with Play/Pause button, stopped by default
 - Theme buttons: Cyber and Matrix neon-green
 - Cyber-style app icon in `assets/icon.png`/`.ico`/`.svg`
+- Edit checkbox locks preset/package/config changes to prevent accidental edits
 - Direct q2pro launch on Linux and Windows
 
 ## Notes
@@ -70,6 +71,8 @@ Package list order is encoded into symlink names with `q2m_pak_NN_` prefixes, so
 Package panel shows every `.pak`/`.pkz` from `.q2manager/paks`. Left-click a row to toggle it for the current preset. Active rows show their load order. Right-click an active row to select it, then use `Up`/`Dn` to reorder.
 
 Configs panel shows every `.cfg` from `.q2manager/configs` recursively. Left-click a config to toggle it for the current preset. Active rows show exec order. Right-click a config to select it, then use `Up`/`Dn` to reorder if active.
+
+Enable `Edit` before changing presets, packages, configs, engine path, name, or extra args. Preset selection, scrolling, refresh, theme, music, and launch remain available while locked.
 
 Selected configs are symlinked into `baseq2` as `q2m_cfg_NN_name.cfg`. Generated `autoexec.cfg` only execs those local names because q2pro does not load `..` paths from `baseq2`.
 
